@@ -1,0 +1,547 @@
+import * as THREE from 'three';
+import { CFG } from './config.js';
+import { buildScene } from './scene.js';
+import { WeaponSystem, VIEW_LAYER } from './weapons.js';
+import { Player } from './player.js';
+import { Robot, pickType, STATE as AI } from './robots.js';
+import { FX } from './fx.js';
+import * as audio from './audio.js';
+import * as settings from './settings.js';
+
+export const STATE = { MENU: 'menu', PLAY: 'play', PAUSED: 'paused', OVER: 'over' };
+export const MODE = { SURVIVAL: 'survival', TIME: 'timeattack' };
+
+export class Game {
+  constructor(renderer, input, progression) {
+    this.renderer = renderer;
+    this.input = input;
+    this.prog = progression;
+
+    this.camera = new THREE.PerspectiveCamera(settings.get('fov'), 1, 0.05, 400);
+
+    const built = buildScene(renderer);
+    this.scene = built.scene;
+    this.blockers = built.blockers;
+    this.colliders = built.colliders;
+    this.sun = built.sun;
+    this.spawnPoint = built.spawn;
+    this.scene.add(this.camera);
+
+    this.player = new Player(this.camera, this.colliders, built.spawn);
+    this.weapons = new WeaponSystem(this.camera, audio.sfx, built.mats, progression);
+    this.fx = new FX(this.scene, this.camera);
+
+    this.ray = new THREE.Raycaster();
+    this.losRay = new THREE.Raycaster();
+    this.losRay.far = 120;
+
+    this.player.onFootstep = (s) => audio.sfx.footstep(s);
+    this.player.onLand = () => audio.sfx.land();
+
+    this.robots = [];
+    this.state = STATE.MENU;
+    this.mode = MODE.SURVIVAL;
+    this.fovCurrent = settings.get('fov');
+    this.losTick = 0;
+
+    // HUD hooks
+    this.onHit = () => {};
+    this.onKill = () => {};
+    this.onWave = () => {};
+    this.onStateChange = () => {};
+    this.onDamaged = () => {};
+    this.onCombo = () => {};
+    this.onLevelUp = () => {};
+
+    this.applySettings();
+    this.reset();
+  }
+
+  applySettings() {
+    this.player.sensMul = settings.get('sensitivity');
+    this.input.invertY = settings.get('invertY');
+    const fov = settings.get('fov');
+    this.baseFov = fov;
+    this.camera.fov = fov;
+    this.camera.updateProjectionMatrix();
+  }
+
+  reset() {
+    for (const r of this.robots) this.scene.remove(r.root);
+    this.robots.length = 0;
+    this.fx.clear();
+    this.player.reset();
+    this.weapons.resetAll();
+
+    this.score = 0;
+    this.wave = 0;
+    this.kills = 0;
+    this.headshots = 0;
+    this.elapsed = 0;
+    this.hurtT = 0;
+    this.breakT = 0;
+    this.queued = 0;
+    this.waveActive = false;
+    this.runXp = 0;
+    // Must be initialised here. Time Attack never calls startWave(), so an
+    // undefined timer made `spawnTimer -= dt` NaN and nothing ever spawned.
+    this.spawnTimer = 0;
+
+    this.combo = 0;
+    this.comboT = 0;
+    this.multiplier = 1;
+
+    this.timeLeft = CFG.timeAttack.duration;
+
+    this.fovCurrent = this.baseFov;
+    this.camera.fov = this.baseFov;
+    this.camera.updateProjectionMatrix();
+    this.player.applyToCamera(0);
+  }
+
+  get health() { return this.player.state.health; }
+  get armor() { return this.player.state.armor; }
+  get aliveCount() { return this.robots.reduce((n, r) => n + (r.dead ? 0 : 1), 0); }
+  get accuracy() { return this.weapons.shotsFired ? this.weapons.shotsHit / this.weapons.shotsFired : 0; }
+
+  start(mode) {
+    this.mode = mode || MODE.SURVIVAL;
+    this.reset();
+    this.state = STATE.PLAY;
+    this.input.reset();
+    this.input.enabled = true;
+    audio.unlock();
+    this.breakT = 2.0;
+    this.onStateChange(this.state);
+  }
+
+  pause() {
+    if (this.state !== STATE.PLAY) return;
+    this.state = STATE.PAUSED;
+    this.input.enabled = false;
+    if (document.pointerLockElement) document.exitPointerLock();
+    this.onStateChange(this.state);
+  }
+
+  resume() {
+    if (this.state !== STATE.PAUSED) return;
+    this.state = STATE.PLAY;
+    this.input.reset();
+    this.input.enabled = true;
+    this.onStateChange(this.state);
+  }
+
+  toMenu() {
+    this.state = STATE.MENU;
+    this.input.enabled = false;
+    if (document.pointerLockElement) document.exitPointerLock();
+    this.onStateChange(this.state);
+  }
+
+  // ---------------- waves ----------------
+
+  waveCount(n) {
+    const preset = CFG.wave.counts[n - 1];
+    if (preset) return preset;
+    return CFG.wave.counts[CFG.wave.counts.length - 1] + (n - CFG.wave.counts.length) * CFG.wave.growth;
+  }
+
+  startWave() {
+    this.wave++;
+    this.waveActive = true;
+    this.queued = this.waveCount(this.wave);
+    this.spawnTimer = 0;
+    audio.sfx.waveStart();
+    this.onWave(this.wave, this.queued, false);
+  }
+
+  spawnRobot() {
+    const p = this.player.state;
+    // Spawn out of sight where possible: try a few rings before giving up.
+    let x = 0, z = 0, ok = false;
+    for (let tries = 0; tries < 12 && !ok; tries++) {
+      const ang = Math.random() * Math.PI * 2;
+      const dist = CFG.wave.spawnMin + Math.random() * (CFG.wave.spawnMax - CFG.wave.spawnMin);
+      x = p.x + Math.sin(ang) * dist;
+      z = p.z + Math.cos(ang) * dist;
+      x = THREE.MathUtils.clamp(x, -32, 32);
+      z = THREE.MathUtils.clamp(z, -44, 24);
+      ok = !this.blockedAt(x, z);
+    }
+    const type = pickType(this.wave);
+    const tier = 1 + Math.max(0, this.wave - 1) * 0.07;
+    const rb = new Robot(type, x, z, tier);
+    this.scene.add(rb.root);
+    this.robots.push(rb);
+  }
+
+  // ---------------- world queries used by the AI ----------------
+
+  blockedAt(x, z) {
+    const r = 0.55;
+    for (const c of this.colliders) {
+      if (c.top < 0.9) continue;                       // low enough to walk over
+      if (c.bottom !== undefined && c.bottom > 1.9) continue;   // high enough to walk under
+      if (x + r > c.minX && x - r < c.maxX && z + r > c.minZ && z - r < c.maxZ) return true;
+    }
+    return false;
+  }
+
+  // Line of sight against the collider boxes rather than the render meshes.
+  // Raycasting merged geometry walks every triangle in the map, which at a
+  // dozen robots was costing more than the entire render.
+  canSee(from, playerState) {
+    const tx = playerState.x, ty = playerState.y + 1.3, tz = playerState.z;
+    const dx = tx - from.x, dy = ty - from.y, dz = tz - from.z;
+    const dist = Math.hypot(dx, dy, dz);
+    if (dist < 0.5) return true;
+
+    for (const c of this.colliders) {
+      const bottom = c.bottom === undefined ? 0 : c.bottom;
+      // slab test over the parametric range [0,1] of the segment
+      let t0 = 0, t1 = 1;
+      const slab = (o, d, lo, hi) => {
+        if (Math.abs(d) < 1e-6) return o >= lo && o <= hi;
+        let a = (lo - o) / d, b = (hi - o) / d;
+        if (a > b) { const s = a; a = b; b = s; }
+        if (a > t0) t0 = a;
+        if (b < t1) t1 = b;
+        return t1 >= t0;
+      };
+      if (!slab(from.x, dx, c.minX, c.maxX)) continue;
+      if (!slab(from.y, dy, bottom, c.top)) continue;
+      if (!slab(from.z, dz, c.minZ, c.maxZ)) continue;
+      // ignore contacts right at the target, so standing against cover still sees
+      if (t1 > 0.02 && t0 < 0.96) return false;
+    }
+    return true;
+  }
+
+  // ---------------- combat ----------------
+
+  tryFire() {
+    const dirs = this.weapons.fire(this.scene, this.input.firing);
+    if (!dirs) return;
+
+    this.fx.addShake(0.010 * (1 - this.weapons.ads * 0.45) * (this.weapons.spec.pellets > 1 ? 2.2 : 1));
+
+    const origin = new THREE.Vector3();
+    this.camera.getWorldPosition(origin);
+    const muzzle = new THREE.Vector3();
+    this.weapons.model.muzzle.getWorldPosition(muzzle);
+
+    const targets = this.blockers.slice();
+    for (const r of this.robots) if (!r.dead) targets.push(...r.hitboxes);
+
+    const range = this.weapons.spec.range;
+    let anyHit = false, anyKill = false, anyHead = false;
+    let hitPoint = null, dealt = 0;
+
+    for (const dir of dirs) {
+      this.ray.set(origin, dir);
+      this.ray.far = range;
+      const hits = this.ray.intersectObjects(targets, false);
+      if (!hits.length) {
+        this.fx.tracer(muzzle, origin.clone().addScaledVector(dir, range));
+        continue;
+      }
+      const hit = hits[0];
+      this.fx.tracer(muzzle, hit.point);
+      const ud = hit.object.userData;
+
+      if (ud && ud.robot) {
+        const robot = ud.robot;
+        this.weapons.shotsHit++;
+        const dmg = this.weapons.damage * ud.mul;
+        const res = robot.damage(dmg, ud.part);
+        dealt += dmg;
+        hitPoint = hit.point.clone();
+        anyHit = true;
+        const n = new THREE.Vector3().subVectors(origin, hit.point).normalize();
+        this.fx.sparkBurst(hit.point, n, ud.part === 'head' ? 14 : 8);
+        this.fx.puff(hit.point, 0.24, 0x9fd4ff);
+        if (res.killed) {
+          anyKill = true;
+          if (res.headshot) anyHead = true;
+          this.registerKill(robot, res.headshot, hit.point.clone());
+        }
+      } else {
+        const n = hit.face ? hit.face.normal.clone() : new THREE.Vector3(0, 1, 0);
+        this.fx.puff(hit.point, 0.42, 0xbfc6cf);
+        this.fx.sparkBurst(hit.point, n, 4);
+        audio.sfx.impact();
+      }
+    }
+
+    if (anyHit && !anyKill) {
+      audio.sfx[anyHead ? 'headshot' : 'hit']();
+      this.onHit(anyHead ? 'head' : 'body', hitPoint, Math.round(dealt));
+    }
+  }
+
+  registerKill(robot, headshot, point) {
+    this.kills++;
+    if (headshot) this.headshots++;
+
+    this.combo++;
+    this.comboT = CFG.score.comboWindow;
+    let mult = 1;
+    for (const [need, m] of CFG.score.comboTiers) if (this.combo >= need) mult = m;
+    if (mult !== this.multiplier) {
+      this.multiplier = mult;
+      if (mult > 1) { audio.sfx.combo(mult); this.onCombo(mult, this.combo); }
+    }
+
+    const base = robot.spec.score + (headshot ? CFG.score.headshotBonus : 0);
+    this.score += Math.round(base * this.multiplier);
+
+    const xp = robot.spec.xp + (headshot ? CFG.xp.headshot : 0);
+    this.runXp += xp;
+
+    // Salvage: every kill returns ammunition, capped at the weapon's pool.
+    const w = this.weapons;
+    const give = Math.max(3, Math.round(w.magSize * 0.22));
+    w.reserve[w.current] = Math.min(w.spec.reserve, w.reserve[w.current] + give);
+
+    this.fx.explode(point, robot.spec.colour);
+    audio.sfx.robotDeath();
+    this.onKill({ headshot, point, type: robot.type, name: robot.spec.name, mult: this.multiplier });
+  }
+
+  // A robot shot at the player. Ranged attacks are hitscan with a visible
+  // tracer so incoming fire can be read and broken with cover.
+  robotAttack(dmg, origin, dir, robot) {
+    if (this.state !== STATE.PLAY) return;
+    if (origin && dir) {
+      const camPos = new THREE.Vector3();
+      this.camera.getWorldPosition(camPos);
+      const end = origin.clone().addScaledVector(dir, 90);
+
+      // does cover stop it first?
+      this.ray.set(origin, dir);
+      this.ray.far = 90;
+      const blocked = this.ray.intersectObjects(this.blockers, false);
+      const toPlayer = camPos.clone().sub(origin);
+      const along = toPlayer.dot(dir);
+      const perp = toPlayer.clone().addScaledVector(dir, -along).length();
+      const coverDist = blocked.length ? blocked[0].distance : Infinity;
+
+      if (coverDist < along) {
+        this.fx.tracer(origin, blocked[0].point, 0xff8a5c);
+        this.fx.puff(blocked[0].point, 0.35, 0xffb07a);
+        return;
+      }
+      this.fx.tracer(origin, end, 0xff8a5c);
+      // 0.55m is roughly a torso; wider than that and it goes past
+      if (perp > 0.55 || along < 0) {
+        if (perp < 2.2) audio.sfx.nearMiss();
+        return;
+      }
+      audio.sfx.impact();
+    }
+    this.hurt(dmg);
+  }
+
+  hurt(dmg) {
+    if (this.state !== STATE.PLAY) return;
+    this.hurtT = CFG.player.regenDelay;
+    this.fx.addShake(0.018);
+    const dead = this.player.hurt(dmg);
+    this.onDamaged(this.player.state.health / CFG.player.maxHealth);
+    if (Math.random() < 0.5) audio.sfx.hurt();
+    if (dead) this.gameOver();
+  }
+
+  gameOver() {
+    if (this.state === STATE.OVER) return;
+    this.state = STATE.OVER;
+    this.input.enabled = false;
+    if (document.pointerLockElement) document.exitPointerLock();
+    audio.sfx.gameOver();
+
+    const levelled = this.prog.addXp(this.runXp);
+    this.prog.recordRun({ score: this.score, wave: this.wave, kills: this.kills, mode: this.mode });
+    if (levelled) this.onLevelUp(this.prog.level);
+    this.onStateChange(this.state);
+  }
+
+  // ---------------- frame ----------------
+
+  update(dt) {
+    this.fx.update(dt);
+
+    if (this.state !== STATE.PLAY) {
+      if (this.state === STATE.MENU || this.state === STATE.OVER) {
+        // let death animations finish playing behind the menu
+        const c = this._ctx(); c.frame = ++this.losTick;
+        for (const r of this.robots) if (r.dead) r.update(dt, c);
+      }
+      this.input.take();
+      return;
+    }
+
+    this.elapsed += dt;
+    const inp = this.input.take();
+
+    if (inp.pause) { this.pause(); return; }
+
+    // ---- weapon intent ----
+    this.weapons.triggerHeld = inp.firing;
+    this.weapons.wantAds = inp.ads;
+    if (inp.reload) this.weapons.startReload();
+    if (inp.switchTo === 'next') this.weapons.nextWeapon(1);
+    else if (inp.switchTo === 'prev') this.weapons.nextWeapon(-1);
+    else if (inp.switchTo) this.weapons.switchTo(inp.switchTo);
+    if (this.weapons.mag === 0 && !this.weapons.busy && this.weapons.pool > 0) {
+      this.weapons.startReload();
+    }
+
+    // ---- player, before anything traces a ray through the camera ----
+    this.player.step(dt, {
+      moveX: inp.moveX, moveY: inp.moveY,
+      lookDX: inp.dx, lookDY: inp.dy,
+      jump: inp.jump, crouch: inp.crouch, sprint: inp.sprint,
+    }, this.weapons.ads);
+    if (inp.jump && this.player.state.grounded === false) audio.sfx.jump();
+
+    // recoil rides on top of the player's own aim
+    this.camera.rotation.y += this.weapons.camPunchYaw + this.fx.shake.x;
+    this.camera.rotation.x = THREE.MathUtils.clamp(
+      this.camera.rotation.x + this.weapons.camPunch + this.fx.shake.y,
+      CFG.camera.pitchMin - 0.3, CFG.camera.pitchMax + 0.3);
+
+    this.weapons.setMotion(this.player.moveAmount, inp.dx * 0.05, inp.dy * 0.05);
+    this._fov(dt);
+
+    // ---- robots ----
+    const ctx = this._ctx();
+    ctx.frame = ++this.losTick;
+    for (let i = this.robots.length - 1; i >= 0; i--) {
+      const r = this.robots[i];
+      r.update(dt, ctx);
+      if (r.removable) { this.scene.remove(r.root); this.robots.splice(i, 1); }
+    }
+
+    // Raycasting reads matrixWorld, which the renderer would not refresh until
+    // after this frame's draw call.
+    this.scene.updateMatrixWorld(true);
+
+    if (inp.firing || !this.weapons.spec.auto) this.tryFire();
+    this.weapons.update(dt, this.scene);
+
+    // keep the shadow frustum on the player
+    const p = this.player.state;
+    this.sun.position.set(p.x - 34, 30, p.z + 18);
+    this.sun.target.position.set(p.x, 0, p.z);
+
+    // ---- combo decay ----
+    if (this.comboT > 0) {
+      this.comboT -= dt;
+      if (this.comboT <= 0) { this.combo = 0; this.multiplier = 1; this.onCombo(1, 0); }
+    }
+
+    // ---- mode logic ----
+    if (this.mode === MODE.TIME) {
+      this.timeLeft -= dt;
+      if (this.timeLeft <= 0) { this.timeLeft = 0; this.gameOver(); return; }
+      this._timeAttackFlow(dt);
+    } else {
+      this._survivalFlow(dt);
+    }
+
+    // ---- health regen ----
+    if (this.hurtT > 0) this.hurtT -= dt;
+    else if (p.health < CFG.player.maxHealth) {
+      p.health = Math.min(CFG.player.maxHealth, p.health + CFG.player.regenRate * dt);
+    }
+  }
+
+  _ctx() {
+    if (!this._ctxCache) {
+      this._ctxCache = {
+        player: this.player.state,
+        frame: 0,
+        canSee: (from, ps) => this.canSee(from, ps),
+        blocked: (x, z) => this.blockedAt(x, z),
+        onAttack: (dmg, origin, dir, robot) => this.robotAttack(dmg, origin, dir, robot),
+      };
+    }
+    this._ctxCache.player = this.player.state;
+    return this._ctxCache;
+  }
+
+  _survivalFlow(dt) {
+    if (this.waveActive) {
+      if (this.queued > 0 && this.robots.length < CFG.wave.maxAlive) {
+        this.spawnTimer -= dt;
+        if (this.spawnTimer <= 0) {
+          this.spawnTimer = 0.4 + Math.random() * 0.5;
+          this.spawnRobot();
+          this.queued--;
+        }
+      } else if (this.queued === 0 && this.aliveCount === 0) {
+        this.waveActive = false;
+        const bonus = CFG.score.waveClear * this.wave;
+        this.score += bonus;
+        this.runXp += CFG.xp.waveClear;
+        this.breakT = CFG.wave.breakTime;
+        audio.sfx.waveClear();
+        this.onWave(this.wave, bonus, true);
+        // a fresh magazine between waves keeps the pace up
+        this.weapons.reserve[this.weapons.current] += this.weapons.magSize;
+      }
+    } else {
+      this.breakT -= dt;
+      if (this.breakT <= 0) this.startWave();
+    }
+  }
+
+  _timeAttackFlow(dt) {
+    // Continuous pressure rather than discrete waves.
+    this.wave = 1 + Math.floor((CFG.timeAttack.duration - this.timeLeft) / 45);
+    if (this.robots.length < Math.min(CFG.wave.maxAlive, 5 + this.wave * 2)) {
+      this.spawnTimer -= dt;
+      if (this.spawnTimer <= 0) {
+        this.spawnTimer = Math.max(0.35, 1.4 - this.wave * 0.12);
+        this.spawnRobot();
+      }
+    }
+  }
+
+  _fov(dt) {
+    const c = CFG.camera;
+    const spec = this.weapons.spec;
+    let want = THREE.MathUtils.lerp(this.baseFov, spec.fovAds, this.weapons.ads);
+    if (this.player.state.sprinting && this.weapons.ads < 0.2) want = this.baseFov + 8;
+    this.fovCurrent = THREE.MathUtils.damp(this.fovCurrent, want, 11, dt);
+    if (Math.abs(this.camera.fov - this.fovCurrent) > 0.02) {
+      this.camera.fov = this.fovCurrent;
+      this.camera.updateProjectionMatrix();
+    }
+  }
+
+  // Two passes: world on layer 0, weapon on its own layer with a fresh depth
+  // buffer, so the weapon's lights cost nothing on world pixels and the barrel
+  // can never clip through a wall.
+  render() {
+    const cam = this.camera, r = this.renderer;
+    const bg = this.scene.background;
+
+    cam.layers.set(0);
+    r.render(this.scene, cam);
+
+    // The weapon pass must not repaint the sky. An equirectangular
+    // scene.background is drawn by three as a full-screen mesh with depth
+    // testing disabled on EVERY render() call, so leaving it set here painted
+    // over the finished world and left only sky plus the gun on screen.
+    this.scene.background = null;
+    r.autoClear = false;
+    r.clearDepth();
+    cam.layers.set(VIEW_LAYER);
+    r.render(this.scene, cam);
+    r.autoClear = true;
+    this.scene.background = bg;
+
+    cam.layers.set(0);
+  }
+}
