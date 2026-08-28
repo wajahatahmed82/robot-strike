@@ -3,8 +3,12 @@
 **Play: https://wajahatahmed82.github.io/robot-strike/**
 
 A single-player wave-defence FPS. You hold an abandoned robotics facility
-against escalating waves of hostile machines. Original throughout -- no
+against escalating waves of hostile soldiers. Original throughout -- no
 characters, maps, assets, audio or names taken from any existing game.
+
+Enemies are human but the game is bloodless by design: hits throw dust and kit
+fragments. That keeps the age rating low and short-form platforms from
+suppressing clips, at no cost to how the shooting feels.
 
 ## Controls
 
@@ -22,14 +26,17 @@ jump / crouch / swap.
   waves progress. Clearing a wave resupplies you.
 - **Time Attack** — five minutes, continuous pressure, maximise score.
 
-## Robots
+## Enemies
 
-| Chassis | Health | Speed | Behaviour |
+| Loadout | Health | Speed | Behaviour |
 |---|---|---|---|
-| Scout | 55 | fast | Rushes and strikes at close range |
-| Assault | 130 | medium | Three-round bursts at 20m |
-| Heavy | 420 | slow | Heavy weapon, appears wave 4+ |
-| Elite | 260 | fast | Four-round bursts, breaks to cover when hurt, wave 6+ |
+| Recon | 55 | fast | Light kit, no helmet. Closes and strikes at short range |
+| Rifleman | 130 | medium | Helmet, plate carrier, pack. Three-round bursts at 20m |
+| Gunner | 420 | slow | Heavy plate, shoulder guards, drum-fed. Wave 4+ |
+| Operator | 260 | fast | Balaclava and goggles. Four-round bursts, breaks to cover when hurt. Wave 6+ |
+
+Built to real proportions: 1.73m to 1.95m tall, tapered cylindrical limbs rather
+than boxes. Six draw calls each regardless of piece count.
 
 AI is a real state machine — idle, patrol, alert, chase, attack, search,
 retreat, dead. Robots need line of sight to engage, lose track when it breaks,
@@ -99,7 +106,7 @@ Key decisions behind that:
     src/player.js       movement, crouch, jump, collision with step-up
     src/weapons.js      four weapons, switching, recoil, reload, ADS
     src/viewmodel.js    parametric weapon builder driven by config shape
-    src/robots.js       four chassis, AI state machine, stuck recovery
+    src/enemies.js      four loadouts, AI state machine, stuck recovery
     src/scene.js        the facility, colliders, lighting
     src/materials.js    procedural albedo/roughness/normal generation
     src/hud.js          HUD, main menu, loadout, settings, pause, game over

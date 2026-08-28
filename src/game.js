@@ -3,7 +3,7 @@ import { CFG } from './config.js';
 import { buildScene } from './scene.js';
 import { WeaponSystem, VIEW_LAYER } from './weapons.js';
 import { Player } from './player.js';
-import { Robot, pickType, STATE as AI } from './robots.js';
+import { Robot, pickType, STATE as AI } from './enemies.js';
 import { FX } from './fx.js';
 import * as audio from './audio.js';
 import * as settings from './settings.js';
@@ -258,8 +258,9 @@ export class Game {
         hitPoint = hit.point.clone();
         anyHit = true;
         const n = new THREE.Vector3().subVectors(origin, hit.point).normalize();
-        this.fx.sparkBurst(hit.point, n, ud.part === 'head' ? 14 : 8);
-        this.fx.puff(hit.point, 0.24, 0x9fd4ff);
+        // dust and kit fragments, deliberately not blood
+        this.fx.sparkBurst(hit.point, n, ud.part === 'head' ? 8 : 5);
+        this.fx.puff(hit.point, 0.30, 0xd8cbb4);
         if (res.killed) {
           anyKill = true;
           if (res.headshot) anyHead = true;
@@ -303,7 +304,7 @@ export class Game {
     const give = Math.max(3, Math.round(w.magSize * 0.22));
     w.reserve[w.current] = Math.min(w.spec.reserve, w.reserve[w.current] + give);
 
-    this.fx.explode(point, robot.spec.colour);
+    this.fx.explode(point, 0xc9bda6);
     audio.sfx.robotDeath();
     this.onKill({ headshot, point, type: robot.type, name: robot.spec.name, mult: this.multiplier });
   }

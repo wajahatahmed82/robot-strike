@@ -79,28 +79,29 @@ export const CFG = {
     },
   },
 
-  // Four robot chassis. Distinct silhouette, speed and behaviour each.
+  // Four enemy loadouts. Distinct silhouette, speed and behaviour each.
+  // Key kept as `robots` so save data and existing lookups stay valid.
   robots: {
     scout: {
       // Was 5.0 m/s and 7 damage: faster than the player can walk, which killed
       // a new player inside wave 1. Wave 1 has to be winnable.
-      name: 'SCOUT', health: 55, speed: 3.9, damage: 5, attackRange: 3.0,
-      attackCd: 0.95, score: 100, xp: 10, colour: 0x4fd6ff, scale: 0.82,
+      name: 'RECON', health: 55, speed: 3.9, damage: 5, attackRange: 3.0,
+      attackCd: 0.95, score: 100, xp: 10, colour: 0x4fd6ff, scale: 0.86,   // ~1.73m
       ranged: false, sightRange: 70, wave: 1,
     },
     assault: {
-      name: 'ASSAULT', health: 130, speed: 3.0, damage: 7, attackRange: 20,
-      attackCd: 1.8, score: 150, xp: 18, colour: 0xffb03a, scale: 1.0,
+      name: 'RIFLEMAN', health: 130, speed: 3.0, damage: 7, attackRange: 20,
+      attackCd: 1.8, score: 150, xp: 18, colour: 0xffb03a, scale: 0.90,   // ~1.81m
       ranged: true, burst: 3, sightRange: 80, wave: 2,
     },
     heavy: {
-      name: 'HEAVY', health: 420, speed: 1.7, damage: 20, attackRange: 14,
-      attackCd: 2.3, score: 300, xp: 45, colour: 0xff4d3d, scale: 1.35,
+      name: 'GUNNER', health: 420, speed: 1.7, damage: 20, attackRange: 14,
+      attackCd: 2.3, score: 300, xp: 45, colour: 0xff4d3d, scale: 0.97,   // ~1.95m, bulk gives the presence
       ranged: true, burst: 2, sightRange: 70, wave: 4,
     },
     elite: {
-      name: 'ELITE', health: 260, speed: 4.2, damage: 14, attackRange: 22,
-      attackCd: 1.15, score: 500, xp: 70, colour: 0xc45cff, scale: 1.05,
+      name: 'OPERATOR', health: 260, speed: 4.2, damage: 14, attackRange: 22,
+      attackCd: 1.15, score: 500, xp: 70, colour: 0xc45cff, scale: 0.91,   // ~1.83m
       ranged: true, burst: 4, sightRange: 95, wave: 6, smart: true,
     },
   },
