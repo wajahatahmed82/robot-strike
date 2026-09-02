@@ -52,6 +52,9 @@ export class FX {
     this.sparkGeo = new THREE.BoxGeometry(0.028, 0.028, 0.028);
     this.sparkMat = new THREE.MeshBasicMaterial({ color: 0xffc86a, fog: false });
     this.sparks = [];
+    // Particle budget, driven by the Effects graphics setting. Sparks are
+    // individual meshes, so this is the one effect worth capping.
+    this.budget = { sparkCap: 90, sparkMul: 1.0, puffs: true };
 
     this.shakeAmt = 0;
     this.shake = new THREE.Vector2();
@@ -84,9 +87,16 @@ export class FX {
     p.sprite.visible = true;
   }
 
+  setBudget(level) {
+    if (level === 'low') this.budget = { sparkCap: 24, sparkMul: 0.35, puffs: false };
+    else if (level === 'high') this.budget = { sparkCap: 160, sparkMul: 1.4, puffs: true };
+    else this.budget = { sparkCap: 90, sparkMul: 1.0, puffs: true };
+  }
+
   sparkBurst(pos, normal, n = 8) {
+    n = Math.max(1, Math.round(n * this.budget.sparkMul));
     for (let i = 0; i < n; i++) {
-      if (this.sparks.length > 90) break;
+      if (this.sparks.length > this.budget.sparkCap) break;
       const m = new THREE.Mesh(this.sparkGeo, this.sparkMat);
       m.position.copy(pos);
       const v = normal.clone().multiplyScalar(1.4 + Math.random() * 2.2);
@@ -101,8 +111,8 @@ export class FX {
   // Robot death: a bright core flash, a ring of sparks, and a smoke puff.
   explode(pos, colour) {
     this.puff(pos, 1.5, colour);
-    this.puff(pos, 0.9, 0xffffff);
-    for (let i = 0; i < 3; i++) {
+    if (this.budget.puffs) this.puff(pos, 0.9, 0xffffff);
+    for (let i = 0; i < (this.budget.puffs ? 3 : 1); i++) {
       const n = new THREE.Vector3(Math.random() - 0.5, Math.random() * 0.6, Math.random() - 0.5).normalize();
       this.sparkBurst(pos, n, 9);
     }

@@ -54,7 +54,22 @@ export class Game {
     this.onLevelUp = () => {};
 
     this.applySettings();
+    this.prewarm();
     this.reset();
+  }
+
+  // Build one of every archetype off-screen and compile its shaders, then throw
+  // them away. Without this the first Marksman of a run costs a >100ms stall.
+  prewarm() {
+    const made = [];
+    for (const type of Object.keys(CFG.robots)) {
+      const r = new Robot(type, 0, -900, 1);
+      this.scene.add(r.root);
+      made.push(r);
+    }
+    this.scene.updateMatrixWorld(true);
+    this.renderer.compile(this.scene, this.camera);
+    for (const r of made) this.scene.remove(r.root);
   }
 
   applySettings() {

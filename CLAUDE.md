@@ -39,6 +39,19 @@ Live: https://wajahatahmed82.github.io/robot-strike/
   `yaw: Math.PI` points away from the map.
 - **Initialise every timer in `reset()`.** An undefined `spawnTimer` made
   `spawnTimer -= dt` NaN and Time Attack spawned nothing.
+- **Mouse button state must key off `button`, not `pointerId`.** Every mouse
+  button shares one pointerId. Tracking held buttons by pointerId meant
+  releasing the first button cleared the tracked id, so the second button's
+  release matched nothing and its action stayed latched forever. Symptom:
+  hold LMB+RMB, release both, and the player is stuck aiming.
+- **Freeze the wave director when benchmarking.** A sweep that spawns `n`
+  enemies and then steps frames keeps spawning during the timing loop, so
+  "40 enemies" was really far more and reported 27fps where the controlled
+  measurement gives 267fps. Set `waveActive=false; queued=0; breakT=1e9` and
+  assert the actual count.
+- **Only recompile materials when a shader permutation actually changes.**
+  Setting `material.needsUpdate` on every mesh each time a quality knob moves
+  stalls for hundreds of ms. `setShadows` only does it when the flag flipped.
 - **String `.replace()` in the build must use a function.** `$&` in a replacement
   string means "insert the match", and minified JS contains `$&`.
 
@@ -57,6 +70,19 @@ makes the game look broken when it is not.
 Measure render cost with `gl.finish()`, otherwise you are timing CPU submit only.
 `renderer.info` resets per `render()` call and `render()` runs two passes, so set
 `renderer.info.autoReset = false` before counting draw calls.
+
+## Input
+
+Every action is an independent latched boolean in `src/input.js`, built from
+three OR'd sources (keyboard, mouse buttons, on-screen buttons). One-shot
+actions go through an edge queue drained once per frame. Nothing in input ever
+cancels an unrelated action.
+
+`tools/inputstress.js` dispatches real KeyboardEvent/MouseEvent objects at the
+listeners and asserts 13 simultaneous-input combinations. Run it after any input
+change:
+
+    const t = await import('/tools/inputstress.js'); t.run(__rs)
 
 ## Open
 

@@ -99,6 +99,13 @@ export const CFG = {
       attackCd: 2.3, score: 300, xp: 45, colour: 0xff4d3d, scale: 0.97,   // ~1.95m, bulk gives the presence
       ranged: true, burst: 2, sightRange: 70, wave: 4,
     },
+    sniper: {
+      name: 'MARKSMAN', health: 95, speed: 2.6, damage: 34, attackRange: 55,
+      attackCd: 3.2, score: 400, xp: 55, colour: 0x8ad6a0, scale: 0.90,   // ~1.81m
+      ranged: true, burst: 1, sightRange: 110, wave: 5,
+      keepDistance: 26,        // backs off if the player closes
+      telegraph: 0.9,          // laser settles before the shot, so it is dodgeable
+    },
     elite: {
       name: 'OPERATOR', health: 260, speed: 4.2, damage: 14, attackRange: 22,
       attackCd: 1.15, score: 500, xp: 70, colour: 0xc45cff, scale: 0.91,   // ~1.83m

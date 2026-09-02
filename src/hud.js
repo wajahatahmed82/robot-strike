@@ -37,8 +37,9 @@ export class HUD {
     this.panel = 'main';
     this._v = new THREE.Vector3();
 
-    input.bindHold($('btn-fire'), 'firing');
-    input.bindToggle($('btn-ads'), 'ads');
+    // Each on-screen button drives one named action and nothing else.
+    input.bindHold($('btn-fire'), 'fire');
+    input.bindToggle($('btn-ads'), 'aim');
     input.bindToggle($('btn-crouch'), 'crouch');
     input.bindTap($('btn-reload'), () => this.game.weapons.startReload());
     input.bindTap($('btn-jump'), () => { this.input.jumpQueued = true; });
@@ -384,9 +385,25 @@ export class HUD {
         ${toggle('invertY', 'Invert Vertical Look')}
         <div class="sec">DISPLAY</div>
         ${slider('fov', 'Field of View', 60, 105, 1, (v) => Math.round(v) + '&deg;')}
-        ${choice('quality', 'Graphics Quality', ['low', 'medium', 'high', 'auto'])}
         ${toggle('vsync', 'Frame Limiter')}
         ${toggle('showFps', 'Show FPS')}
+
+        <div class="sec">GRAPHICS PRESET</div>
+        <div class="opt row-between">
+          <span>Preset</span>
+          <div class="seg">${['low', 'medium', 'high', 'ultra', 'auto'].map((o) =>
+            `<button class="${s.quality === o ? 'on' : ''}" data-preset="${o}">${o}</button>`).join('')}
+          </div>
+        </div>
+        ${s.quality === 'custom' ? '<div class="lvlhint">Custom &mdash; individual settings below</div>' : ''}
+
+        <div class="sec">DETAIL</div>
+        ${choice('shadowQuality', 'Shadow Quality', ['off', 'low', 'medium', 'high'])}
+        ${slider('renderScale', 'Resolution Scale', 0.5, 2.0, 0.05, (v) => v.toFixed(2) + 'x')}
+        ${choice('effects', 'Effects Detail', ['low', 'medium', 'high'])}
+        ${choice('viewDistance', 'View Distance', ['near', 'medium', 'far'])}
+        ${toggle('antialias', 'Anti-Aliasing')}
+        <div class="lvlhint">Anti-aliasing is fixed when the page loads &mdash; reload to apply.</div>
         <div class="sec">CROSSHAIR</div>
         ${slider('crosshairSize', 'Crosshair Size', 0.5, 2, 0.1, (v) => v.toFixed(1) + 'x')}
         <div class="opt row-between">
@@ -517,6 +534,18 @@ export class HUD {
       });
     });
 
+    scope.querySelectorAll('[data-preset]').forEach((b) => {
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const name = b.dataset.preset;
+        if (name === 'auto') settings.set('quality', 'auto');
+        else settings.applyPreset(name);
+        audio.sfx.ui();
+        g.applySettings();
+        this.render(g.state);          // redraw so the knobs show the new values
+      });
+    });
+
     scope.querySelectorAll('[data-choice]').forEach((b) => {
       b.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -525,6 +554,8 @@ export class HUD {
         b.parentElement.querySelectorAll('button').forEach((x) => x.classList.remove('on'));
         b.classList.add('on');
         audio.sfx.ui();
+        g.applySettings();
+        this.render(g.state);
       });
     });
 

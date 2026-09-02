@@ -15,7 +15,9 @@ const CAPTURE = new URLSearchParams(location.search).has('capture');
 
 const renderer = new THREE.WebGLRenderer({
   canvas,
-  antialias: false,          // resolution scaling is a better use of the budget
+  // Fixed at context creation, so it only takes effect on reload. The settings
+  // panel says so rather than pretending the toggle is live.
+  antialias: settings.get('antialias'),
   powerPreference: 'high-performance',
   preserveDrawingBuffer: CAPTURE,
   stencil: false,
@@ -32,21 +34,21 @@ const game = new Game(renderer, input, prog);
 const hud = new HUD(game, input, prog);
 
 // ---------------------------------------------------------------- quality ----
-// Phones and laptops vary enormously, so measure instead of guessing. On "auto"
-// the render scale tracks real frame time and shadows switch off before the
-// resolution drops far enough to look soft.
+// Presets write individual knobs; the knobs are what actually drive the
+// renderer, so the two can never disagree. "auto" additionally tracks measured
+// frame time and gives up shadows before it gives up resolution, because soft
+// edges read worse than missing shadows.
 const DPR_CAP = Math.min(window.devicePixelRatio || 1, 2);
-const PRESETS = {
-  low:    { scale: 0.7, shadows: false, shadowSize: 512 },
-  medium: { scale: 1.0, shadows: true,  shadowSize: 512 },
-  high:   { scale: Math.min(DPR_CAP, 1.6), shadows: true, shadowSize: 1024 },
-};
+const SHADOW_SIZE = { off: 0, low: 512, medium: 1024, high: 2048 };
+const VIEW_FOG = { near: 0.016, medium: 0.0075, far: 0.0035 };
+const VIEW_FAR = { near: 160, medium: 280, far: 400 };
 
 let renderScale = 1.0;
 let shadowsOn = true;
 let frameAvg = 16.7;
 
 function setShadows(on, size) {
+  const changed = shadowsOn !== on;
   shadowsOn = on;
   renderer.shadowMap.enabled = on;
   if (size && game.sun.shadow.mapSize.width !== size) {
@@ -54,18 +56,22 @@ function setShadows(on, size) {
     game.sun.shadow.map?.dispose();
     game.sun.shadow.map = null;
   }
-  game.scene.traverse((o) => {
-    if (o.isMesh && o.material) {
-      const m = Array.isArray(o.material) ? o.material : [o.material];
-      m.forEach((x) => { x.needsUpdate = true; });
-    }
-  });
+  // Toggling shadow support changes the shader permutation, so materials have
+  // to recompile. Only do it when the flag actually flipped.
+  if (changed) {
+    game.scene.traverse((o) => {
+      if (o.isMesh && o.material) {
+        const m = Array.isArray(o.material) ? o.material : [o.material];
+        m.forEach((x) => { x.needsUpdate = true; });
+      }
+    });
+  }
 }
 
 function applySize() {
   const w = window.innerWidth || 800;
   const h = window.innerHeight || 600;
-  renderer.setPixelRatio(renderScale);
+  renderer.setPixelRatio(Math.min(renderScale, DPR_CAP * 1.5));
   renderer.setSize(w, h, false);
   game.camera.aspect = w / h;
   game.camera.updateProjectionMatrix();
@@ -75,16 +81,27 @@ function applyQuality() {
   const q = settings.get('quality');
   if (q === 'auto') {
     renderScale = Math.min(DPR_CAP, 1.2);
-    setShadows(true, 512);
+    setShadows(true, 1024);
   } else {
-    const p = PRESETS[q] || PRESETS.medium;
-    renderScale = p.scale;
-    setShadows(p.shadows, p.shadowSize);
+    renderScale = settings.get('renderScale');
+    const sq = settings.get('shadowQuality');
+    setShadows(sq !== 'off', SHADOW_SIZE[sq] || 1024);
   }
+
+  const vd = settings.get('viewDistance');
+  if (game.scene.fog) game.scene.fog.density = VIEW_FOG[vd] ?? VIEW_FOG.medium;
+  game.camera.far = VIEW_FAR[vd] ?? VIEW_FAR.medium;
+  game.camera.updateProjectionMatrix();
+
+  game.fx.setBudget(settings.get('effects'));
   applySize();
 }
 applyQuality();
-settings.onChange((k) => { if (k === 'quality' || k === null) applyQuality(); });
+settings.onChange((k) => {
+  if (k === null || ['quality', 'shadowQuality', 'renderScale', 'effects', 'viewDistance'].includes(k)) {
+    applyQuality();
+  }
+});
 
 let tuneT = 0;
 function autoTune(dt, frameMs) {
@@ -93,8 +110,6 @@ function autoTune(dt, frameMs) {
   tuneT += dt;
   if (tuneT < 0.9) return;
   tuneT = 0;
-  // 16.7ms is the 60fps budget. Give up shadows before resolution, because
-  // soft edges are more noticeable than missing shadows on a small screen.
   if (frameAvg > 17.5) {
     if (shadowsOn) setShadows(false, 512);
     else if (renderScale > 0.6) { renderScale = Math.max(0.6, renderScale - 0.12); applySize(); }
@@ -102,7 +117,7 @@ function autoTune(dt, frameMs) {
     if (renderScale < Math.min(DPR_CAP, 1.4)) {
       renderScale = Math.min(Math.min(DPR_CAP, 1.4), renderScale + 0.08);
       applySize();
-    } else if (!shadowsOn) setShadows(true, 512);
+    } else if (!shadowsOn) setShadows(true, 1024);
   }
 }
 

@@ -53,6 +53,8 @@ const KIT = {
              helmet: true,  pack: true,  name: 'RIFLEMAN' },
   heavy:   { uniform: [0.30, 0.30, 0.26], vest: [0.14, 0.15, 0.13], bulk: 1.22,
              helmet: true,  pack: true,  name: 'GUNNER' },
+  sniper:  { uniform: [0.31, 0.34, 0.27], vest: [0.19, 0.21, 0.17], bulk: 0.94,
+             helmet: false, pack: true,  name: 'MARKSMAN' },
   elite:   { uniform: [0.19, 0.20, 0.22], vest: [0.11, 0.12, 0.14], bulk: 1.02,
              helmet: true,  pack: false, name: 'OPERATOR' },
 };
@@ -123,7 +125,7 @@ function buildSoldier(type) {
   legR.push(...leg());
 
   // ---- carried weapon, sized to the loadout ----
-  const gunLen = type === 'heavy' ? 0.46 : type === 'scout' ? 0.26 : 0.34;
+  const gunLen = type === 'heavy' ? 0.46 : type === 'sniper' ? 0.54 : type === 'scout' ? 0.26 : 0.34;
   const gun = [
     at(B(0.055, 0.06, gunLen), GUN, 0, 0, 0),
     at(C(0.011, 0.011, gunLen * 0.75, 6), GUN, 0, 0.012, -gunLen * 0.82, Math.PI / 2),
@@ -132,6 +134,10 @@ function buildSoldier(type) {
     at(B(0.022, 0.03, 0.05), GUN, 0, 0.045, -0.02),                         // optic
   ];
   if (type === 'heavy') gun.push(at(B(0.09, 0.11, 0.16), GUN, 0, -0.085, -0.04));  // drum
+  if (type === 'sniper') {
+    gun.push(at(C(0.028, 0.028, 0.20, 8), GUN, 0, 0.055, -0.04, Math.PI / 2));      // scope
+    gun.push(at(B(0.02, 0.10, 0.02), GUN, 0, -0.06, -0.34));                        // bipod
+  }
 
   const merge = (a) => mergeGeometries(a, false);
   CACHE[type] = {
@@ -392,6 +398,14 @@ export class Enemy {
       face(dx, dz, 3.5);
     } else if (this.state === S2.ATTACK) {
       face(dx, dz, 6.0);
+      // A marksman backs off rather than closing, so it stays a ranged threat.
+      const keep = this.spec.keepDistance;
+      if (keep && dist < keep) {
+        wantX = -dx / dist; wantZ = -dz / dist;
+        moving = true;
+        this._shoot(dt, ctx, dist, canSee);
+        this.walkingOverride = true;
+      }
       this.strafeT -= dt;
       if (this.strafeT <= 0) { this.strafeT = 0.8 + Math.random() * 1.4; this.strafeDir *= -1; }
       const perpX = -dz / (dist || 1), perpZ = dx / (dist || 1);
