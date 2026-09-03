@@ -69,6 +69,26 @@ Live: https://wajahatahmed82.github.io/robot-strike/
 - **Touch pads are `pointer-events:auto` over the canvas.** They are hidden
   under `(hover: hover) and (pointer: fine)` so they cannot swallow desktop
   clicks; `#btn-pause` deliberately stays.
+- **Never set `frustumCulled = false` to fix a skinned mesh popping.** A posed
+  skeleton moves vertices outside the bind-pose bounds, but turning culling off
+  makes every soldier draw in both passes even when behind the camera. Widen
+  `geometry.boundingSphere` instead (soldier.js uses centre 0,0.95,0 r=1.35).
+- **Benchmark numbers taken over a long session are worthless once the machine
+  throttles.** The old build measured 158fps at HIGH/40, then 16-56fps for the
+  same code twenty minutes later. Always re-measure the baseline immediately
+  before or after the candidate, in the same session, and throw the run away if
+  the baseline moved. A preset that is *slower* than a heavier preset is the
+  tell.
+- **Hand placement on a weapon must be solved, not authored.** Typed-in joint
+  angles have to be redone for every weapon length and still leave the hands
+  beside the gun rather than on it. soldier.js runs a two-bone IK in chest
+  space; because the weapon mount is parented to the chest too, one solve stays
+  correct through every torso twist, lean and recoil.
+- **A support arm at >90% of its reach reads as a plank.** Keep IK targets
+  inside about 85% of `L_UPPER + L_FORE` or the elbow locks straight.
+- **Thigh radius must stay under the half-stance width.** At ±0.10 with a
+  0.119 radius the two legs meet at the crotch and the silhouette reads as a
+  skirt.
 - **String `.replace()` in the build must use a function.** `$&` in a replacement
   string means "insert the match", and minified JS contains `$&`.
 
@@ -87,6 +107,18 @@ makes the game look broken when it is not.
 Measure render cost with `gl.finish()`, otherwise you are timing CPU submit only.
 `renderer.info` resets per `render()` call and `render()` runs two passes, so set
 `renderer.info.autoReset = false` before counting draw calls.
+
+## Characters
+
+`src/soldier.js` builds one skinned mesh per loadout over a 19-bone skeleton and
+solves the arm poses with a two-bone IK. Geometry, gun geometry and the IK
+solutions are cached per loadout; each instance gets its own bones, a tinted
+material clone and a small build scale so a squad does not read as five copies
+of one man.
+
+`poseSoldier()` is a single blended pose function, not a clip switcher: walk,
+aim, recoil, flinch and death are weights that all apply in the same frame.
+Distant soldiers (>26m) pose every third frame and stop casting shadows.
 
 ## Input
 

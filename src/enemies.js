@@ -1,16 +1,14 @@
 import * as THREE from 'three';
-import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { CFG } from './config.js';
+import { createSoldier, poseSoldier, KIT, BONE } from './soldier.js';
 
-// Hostile soldiers: four loadouts, one shared code path.
+// Hostile soldiers: five loadouts, one shared code path.
 //
-// Built to real proportions -- 1.8m tall, 0.24m head, shoulders at 1.45m, and
-// limbs made from tapered cylinders rather than boxes. That one change is most
-// of the difference between reading as a person and reading as a machine.
-//
-// Colour is baked into vertex attributes and each animated group is merged, so
-// a soldier costs six draw calls regardless of how many pieces it is made of.
-// Geometry per loadout is built once and shared by every instance.
+// The body is a skinned mesh over a 19-bone skeleton (see soldier.js), so
+// elbows, knees and shoulders deform instead of pivoting as separate parts.
+// Geometry and material are shared per loadout; only the skeleton is per
+// instance. Animation is one blended pose function rather than a clip switch,
+// so walking, aiming, recoil and a flinch can all be true at the same time.
 //
 // Hits throw dust and kit fragments, never blood. That keeps the age rating
 // low and short-form platforms from suppressing clips, at no cost to feel.
@@ -20,141 +18,18 @@ export const STATE = {
   ATTACK: 'attack', SEARCH: 'search', RETREAT: 'retreat', DEAD: 'dead',
 };
 
-const SKIN = [0.60, 0.44, 0.34];
-const GLOVE = [0.13, 0.14, 0.13];
-const BOOT = [0.10, 0.10, 0.10];
-const GUN = [0.13, 0.14, 0.15];
+export { KIT };
 
-function tint(geo, rgb) {
-  const n = geo.attributes.position.count;
-  const arr = new Float32Array(n * 3);
-  for (let i = 0; i < n; i++) { arr[i * 3] = rgb[0]; arr[i * 3 + 1] = rgb[1]; arr[i * 3 + 2] = rgb[2]; }
-  geo.setAttribute('color', new THREE.BufferAttribute(arr, 3));
-  return geo;
-}
-
-const OBJ = new THREE.Object3D();
-function at(geo, rgb, x, y, z, rx = 0, ry = 0, rz = 0) {
-  OBJ.position.set(x, y, z);
-  OBJ.rotation.set(rx, ry, rz);
-  OBJ.scale.set(1, 1, 1);
-  OBJ.updateMatrix();
-  return tint(geo.clone().applyMatrix4(OBJ.matrix), rgb);
-}
-const B = (w, h, d) => new THREE.BoxGeometry(w, h, d);
-const C = (rt, rb, h, s = 8) => new THREE.CylinderGeometry(rt, rb, h, s);
-const S = (r, w = 8, h = 6) => new THREE.SphereGeometry(r, w, h);
-
-// Each loadout differs in bulk, kit and headgear, not just colour.
-const KIT = {
-  scout:   { uniform: [0.40, 0.44, 0.34], vest: [0.22, 0.24, 0.19], bulk: 0.92,
-             helmet: false, pack: false, name: 'RECON' },
-  assault: { uniform: [0.34, 0.37, 0.30], vest: [0.17, 0.19, 0.16], bulk: 1.0,
-             helmet: true,  pack: true,  name: 'RIFLEMAN' },
-  heavy:   { uniform: [0.30, 0.30, 0.26], vest: [0.14, 0.15, 0.13], bulk: 1.22,
-             helmet: true,  pack: true,  name: 'GUNNER' },
-  sniper:  { uniform: [0.31, 0.34, 0.27], vest: [0.19, 0.21, 0.17], bulk: 0.94,
-             helmet: false, pack: true,  name: 'MARKSMAN' },
-  elite:   { uniform: [0.19, 0.20, 0.22], vest: [0.11, 0.12, 0.14], bulk: 1.02,
-             helmet: true,  pack: false, name: 'OPERATOR' },
-};
-
-const CACHE = {};
-
-function buildSoldier(type) {
-  if (CACHE[type]) return CACHE[type];
-  const k = KIT[type] || KIT.assault;
-  const U = k.uniform, V = k.vest, w = k.bulk;
-  const body = [], armL = [], armR = [], legL = [], legR = [];
-
-  // ---- torso: hips at y=0, head on top ----
-  body.push(at(B(0.34 * w, 0.20, 0.22), U, 0, 0.06, 0));                    // hips
-  body.push(at(C(0.175 * w, 0.155 * w, 0.30, 10), U, 0, 0.31, 0));          // abdomen
-  body.push(at(B(0.40 * w, 0.30, 0.24), U, 0, 0.60, 0));                    // chest
-  body.push(at(B(0.42 * w, 0.28, 0.28), V, 0, 0.61, 0.005));                // plate carrier
-  body.push(at(B(0.13, 0.10, 0.07), V, -0.11 * w, 0.50, 0.15));             // mag pouches
-  body.push(at(B(0.13, 0.10, 0.07), V, 0.03 * w, 0.50, 0.15));
-  body.push(at(B(0.10, 0.09, 0.07), V, 0.16 * w, 0.50, 0.12));
-  if (k.pack) body.push(at(B(0.30 * w, 0.34, 0.16), V, 0, 0.58, -0.19));    // back pack
-  if (type === 'heavy') {
-    body.push(at(B(0.46, 0.20, 0.14), V, 0, 0.78, -0.16));                  // ammo box
-    body.push(at(B(0.16, 0.22, 0.16), V, -0.30, 0.60, 0));                  // shoulder plates
-    body.push(at(B(0.16, 0.22, 0.16), V, 0.30, 0.60, 0));
-  }
-
-  // ---- head ----
-  body.push(at(C(0.075, 0.075, 0.09, 8), SKIN, 0, 0.79, 0));                // neck
-  body.push(at(S(0.115, 10, 8), SKIN, 0, 0.90, 0));                         // head
-  if (type === 'elite') {
-    body.push(at(B(0.20, 0.13, 0.06), [0.10, 0.10, 0.11], 0, 0.885, 0.085)); // balaclava
-    body.push(at(B(0.21, 0.05, 0.04), [0.05, 0.06, 0.07], 0, 0.925, 0.10));  // goggles
-  } else {
-    body.push(at(B(0.19, 0.07, 0.05), U, 0, 0.885, 0.095));                 // face wrap
-  }
-  if (k.helmet) {
-    body.push(at(S(0.135, 10, 6), V, 0, 0.925, 0));
-    body.push(at(B(0.24, 0.035, 0.10), V, 0, 0.935, 0.085));
-    body.push(at(B(0.055, 0.05, 0.06), V, 0.115, 0.925, 0.02));             // side rail
-  } else {
-    body.push(at(C(0.125, 0.125, 0.055, 10), U, 0, 0.955, 0));              // patrol cap
-    body.push(at(B(0.20, 0.02, 0.10), U, 0, 0.945, 0.09));
-  }
-  body.push(at(C(0.10, 0.13, 0.14, 8), U, -0.225 * w, 0.665, 0));           // shoulders
-  body.push(at(C(0.10, 0.13, 0.14, 8), U, 0.225 * w, 0.665, 0));
-
-  // ---- arms: pivot at the shoulder ----
-  const arm = () => [
-    at(C(0.062 * w, 0.052 * w, 0.30, 8), U, 0, -0.15, 0),
-    at(S(0.055, 8, 6), U, 0, -0.30, 0),                                     // elbow
-    at(C(0.050, 0.045, 0.28, 8), U, 0, -0.44, 0),
-    at(B(0.085, 0.10, 0.075), GLOVE, 0, -0.61, 0.01),                       // hand
-    at(B(0.09, 0.06, 0.05), GLOVE, 0, -0.575, 0.055),
-  ];
-  armL.push(...arm());
-  armR.push(...arm());
-
-  // ---- legs: pivot at the hip ----
-  const leg = () => [
-    at(C(0.085 * w, 0.070 * w, 0.44, 8), U, 0, -0.22, 0),
-    at(S(0.075, 8, 6), U, 0, -0.44, 0),                                     // knee
-    at(C(0.068, 0.055, 0.42, 8), U, 0, -0.65, 0),
-    at(B(0.115, 0.075, 0.135), BOOT, 0, -0.885, 0.005),
-    at(B(0.125, 0.09, 0.26), BOOT, 0, -0.905, 0.055),                       // boot
-  ];
-  legL.push(...leg());
-  legR.push(...leg());
-
-  // ---- carried weapon, sized to the loadout ----
-  const gunLen = type === 'heavy' ? 0.46 : type === 'sniper' ? 0.54 : type === 'scout' ? 0.26 : 0.34;
-  const gun = [
-    at(B(0.055, 0.06, gunLen), GUN, 0, 0, 0),
-    at(C(0.011, 0.011, gunLen * 0.75, 6), GUN, 0, 0.012, -gunLen * 0.82, Math.PI / 2),
-    at(B(0.035, 0.10, 0.07), GUN, 0, -0.075, 0.02),                         // magazine
-    at(B(0.045, 0.05, 0.11), GUN, 0, -0.005, gunLen * 0.58),                // stock
-    at(B(0.022, 0.03, 0.05), GUN, 0, 0.045, -0.02),                         // optic
-  ];
-  if (type === 'heavy') gun.push(at(B(0.09, 0.11, 0.16), GUN, 0, -0.085, -0.04));  // drum
-  if (type === 'sniper') {
-    gun.push(at(C(0.028, 0.028, 0.20, 8), GUN, 0, 0.055, -0.04, Math.PI / 2));      // scope
-    gun.push(at(B(0.02, 0.10, 0.02), GUN, 0, -0.06, -0.34));                        // bipod
-  }
-
-  const merge = (a) => mergeGeometries(a, false);
-  CACHE[type] = {
-    body: merge(body), armL: merge(armL), armR: merge(armR),
-    legL: merge(legL), legR: merge(legR), gun: merge(gun),
-    mat: new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.88, metalness: 0.05 }),
-    bulk: w,
-  };
-  return CACHE[type];
-}
+// The bind pose stands 1.74m to the crown; the wave scales were tuned against
+// the older 1.98m parts model, so the whole rig is scaled to match rather than
+// re-tuning every spec.
+const MODEL_SCALE = 1.14;
 
 const HITBOX = new THREE.MeshBasicMaterial({ visible: false });
 let nextId = 1;
 
 export class Enemy {
   constructor(type, x, z, tier) {
-    const P = buildSoldier(type);
     const spec = CFG.robots[type];
     this.id = nextId++;
     this.type = type;
@@ -189,46 +64,41 @@ export class Enemy {
     this.root.position.set(x, 0, z);
     this.root.scale.setScalar(spec.scale);
 
-    // hips sit at 0.92m so the soldier stands 1.8m tall
+    // Character space has the feet at y=0, so the body group sits at the root.
+    // MODEL_SCALE brings the bind pose to the ~1.98m the wave scales expect, so
+    // spec.scale keeps meaning what it meant for the old parts-based soldier.
     this.body = new THREE.Group();
-    this.body.position.y = 0.92;
-    this.baseY = 0.92;
+    this.body.scale.setScalar(MODEL_SCALE);   // build variation applied below
     this.root.add(this.body);
 
-    const mk = (geo) => { const m = new THREE.Mesh(geo, P.mat); m.castShadow = true; return m; };
-    this.torso = mk(P.body);
-    this.body.add(this.torso);
+    const built = createSoldier(type);
+    this.body.scale.setScalar(MODEL_SCALE * built.build);
+    this.mesh = built.mesh;
+    this.bones = built.bones;
+    this.mount = built.mount;
+    this.skeleton = built.skeleton;
+    this.arms = built.arms;
+    this.body.add(this.mesh);
 
-    const sx = 0.225 * P.bulk;
-    this.armL = new THREE.Group(); this.armL.position.set(-sx, 0.665, 0);
-    this.armR = new THREE.Group(); this.armR.position.set(sx, 0.665, 0);
-    this.armL.add(mk(P.armL));
-    this.armR.add(mk(P.armR));
-    this.body.add(this.armL, this.armR);
+    // Animation weights, all live at once rather than one exclusive state.
+    this.aimW = 0;
+    this.walkW = 0;
+    this.fireT = 0;
+    this.hitT = 0;
+    this.hitSide = 1;
+    this.breathe = Math.random() * Math.PI * 2;
+    this.poseSkip = (this.id * 5) % 3;
+    this.dist = 99;
 
-    this.legL = new THREE.Group(); this.legL.position.set(-0.105, 0, 0);
-    this.legR = new THREE.Group(); this.legR.position.set(0.105, 0, 0);
-    this.legL.add(mk(P.legL));
-    this.legR.add(mk(P.legR));
-    this.body.add(this.legL, this.legR);
-
-    this.gun = mk(P.gun);
-    this.gun.position.set(0.16, 0.44, 0.20);
-    this.gun.rotation.set(-0.15, 0.16, 0);
-    this.body.add(this.gun);
-
-    // rifle held across the chest
-    this.armL.rotation.set(-1.15, 0.30, 0.34);
-    this.armR.rotation.set(-0.95, -0.18, -0.20);
-
-    // Sight origin: roughly eye height. The AI traces from here.
+    // Sight origin, roughly eye height. The AI traces from here.
     this.head = new THREE.Object3D();
-    this.head.position.set(0, 0.90, 0.10);
+    this.head.position.set(0, 1.60, 0.09);
     this.body.add(this.head);
 
+    // Muzzle rides the weapon, so it points wherever the hands do.
     this.muzzle = new THREE.Object3D();
-    this.muzzle.position.set(0.16, 0.46, -0.28);
-    this.body.add(this.muzzle);
+    this.muzzle.position.set(0, 0.012, built.gunLen * 1.05);
+    this.mount.add(this.muzzle);
 
     this.flash = new THREE.Mesh(
       new THREE.PlaneGeometry(0.17, 0.17),
@@ -238,7 +108,7 @@ export class Enemy {
       }));
     this.flash.position.copy(this.muzzle.position);
     this.flash.visible = false;
-    this.body.add(this.flash);
+    this.mount.add(this.flash);
 
     this.hitboxes = [];
     this._hitboxes();
@@ -254,16 +124,18 @@ export class Enemy {
       this.body.add(m);
       this.hitboxes.push(m);
     };
-    add(0.28, 0.30, 0.28, 0.91, 'head', CFG.weapons.rifle.headMul);
-    add(0.46, 0.52, 0.30, 0.50, 'body', 1.0);
-    add(0.62, 0.40, 0.26, 0.55, 'arms', 0.75);
-    add(0.40, 0.80, 0.26, -0.40, 'legs', 0.65);
+    add(0.26, 0.28, 0.27, 1.60, 'head', CFG.weapons.rifle.headMul);
+    add(0.44, 0.46, 0.30, 1.20, 'body', 1.0);
+    add(0.60, 0.34, 0.26, 1.28, 'arms', 0.75);
+    add(0.38, 0.86, 0.28, 0.52, 'legs', 0.65);
   }
 
   damage(amount, part) {
     if (this.dead) return { killed: false };
     this.hp -= amount;
     this.hitFlash = 1;
+    this.hitT = 1;
+    this.hitSide = Math.random() < 0.5 ? -1 : 1;
     // Being shot always reveals the player, even from behind cover.
     if (this.state === STATE.IDLE || this.state === STATE.PATROL) {
       this.state = STATE.ALERT;
@@ -286,6 +158,7 @@ export class Enemy {
     const pos = this.root.position;
     const dx = p.x - pos.x, dz = p.z - pos.z;
     const dist = Math.hypot(dx, dz);
+    this.dist = dist;
     this.stateT += dt;
     if (this.hitFlash > 0) this.hitFlash = Math.max(0, this.hitFlash - dt * 4);
 
@@ -476,6 +349,7 @@ export class Enemy {
     dir.y += (Math.random() - 0.5) * miss;
     dir.z += (Math.random() - 0.5) * miss;
     dir.normalize();
+    this.fireT = 1;
     this.flash.visible = true;
     this.flash.material.opacity = 0.9;
     this.flash.rotation.z = Math.random() * 3;
@@ -504,24 +378,49 @@ export class Enemy {
   }
 
   _animate(dt) {
-    const s = Math.sin(this.phase);
-    if (this.walking) {
-      // hips swing, torso counter-rotates, arms brace the weapon
-      this.legL.rotation.x = s * 0.65;
-      this.legR.rotation.x = -s * 0.65;
-      this.body.position.y = this.baseY + Math.abs(s) * 0.03;
-      this.body.rotation.z = s * 0.035;
-      this.armL.rotation.x = -1.15 + s * 0.14;
-      this.armR.rotation.x = -0.95 - s * 0.12;
-    } else {
-      this.legL.rotation.x *= 0.85;
-      this.legR.rotation.x *= 0.85;
-      this.body.rotation.z *= 0.85;
-      this.body.position.y = THREE.MathUtils.damp(this.body.position.y, this.baseY, 6, dt);
-      this.armL.rotation.x = THREE.MathUtils.damp(this.armL.rotation.x, -1.15, 6, dt);
-      this.armR.rotation.x = THREE.MathUtils.damp(this.armR.rotation.x, -0.95, 6, dt);
+    // Animation LOD. A soldier 30m away is a few pixels tall; posing 19 bones
+    // for it every frame is most of the simulation cost at 40 enemies. Far
+    // ones pose every third frame and stop casting shadows, which is the
+    // single biggest render saving and is not visible in play.
+    const far = this.dist > 26;
+    if (far) {
+      this.poseSkip = (this.poseSkip + 1) % 3;
+      if (this.poseSkip !== 0) {
+        this._flashDecay(dt);
+        return;
+      }
+      dt *= 3;
     }
+    if (this.mesh.castShadow !== (this.dist < 24)) this.mesh.castShadow = this.dist < 24;
 
+    // Weights ease toward their targets so the soldier never snaps between
+    // stances. Every weight is independent; walking while aiming while
+    // recoiling is one pose, not three competing clips.
+    const wantWalk = this.walking ? 1 : 0;
+    this.walkW += (wantWalk - this.walkW) * Math.min(1, dt * 9);
+    const wantAim = (this.state === STATE.ATTACK || this.state === STATE.CHASE) ? 1 : 0;
+    this.aimW += (wantAim - this.aimW) * Math.min(1, dt * 5);
+    this.fireT = Math.max(0, this.fireT - dt * 6);
+    this.hitT = Math.max(0, this.hitT - dt * 4.5);
+    this.breathe += dt * 1.6;
+
+    this.skeleton.needsPose = true;
+    poseSoldier(this.bones, {
+      phase: this.phase,
+      arms: this.arms,
+      walk: this.walkW,
+      aim: this.aimW,
+      fire: this.fireT,
+      hit: this.hitT,
+      hitSide: this.hitSide,
+      death: 0,
+      breathe: this.breathe,
+    });
+
+    this._flashDecay(dt);
+  }
+
+  _flashDecay(dt) {
     if (this.flash.visible) {
       this.flash.material.opacity -= dt * 14;
       if (this.flash.material.opacity <= 0) {
@@ -533,16 +432,21 @@ export class Enemy {
 
   _death(dt) {
     this.deathT += dt;
-    const t = Math.min(1, this.deathT / 0.6);
+    const t = Math.min(1, this.deathT / 0.75);
     const e = t * t * (3 - 2 * t);
-    // fold forward, drop, twist on the way down
-    this.body.rotation.x = e * 1.45;
-    this.body.rotation.z = e * 0.35 * this.deathSpin;
-    this.body.position.y = this.baseY - e * 0.66;
-    this.legL.rotation.x = -e * 0.7;
-    this.legR.rotation.x = -e * 0.4;
-    this.armL.rotation.x = -1.15 + e * 0.9;
-    this.armR.rotation.x = -0.95 + e * 0.7;
+    this.skeleton.needsPose = true;
+    poseSoldier(this.bones, {
+      phase: this.phase,
+      arms: this.arms,
+      walk: 0,
+      aim: 0,
+      fire: 0,
+      hit: 0,
+      death: e,
+      deathSpin: this.deathSpin,
+      breathe: this.breathe,
+    });
+    // sink out of sight once the fall has finished, then the wave frees it
     if (this.deathT > 1.8) this.root.position.y = -(this.deathT - 1.8) * 1.1;
   }
 
