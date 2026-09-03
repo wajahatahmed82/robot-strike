@@ -52,6 +52,23 @@ Live: https://wajahatahmed82.github.io/robot-strike/
 - **Only recompile materials when a shader permutation actually changes.**
   Setting `material.needsUpdate` on every mesh each time a quality knob moves
   stalls for hundreds of ms. `setShadows` only does it when the flag flipped.
+- **Pointer lock has to be switched on, not just supported.** `wantPointerLock`
+  was initialised to `false` and never set anywhere, so `requestPointerLock()`
+  never ran, `pointerLocked` stayed false, and the `mousemove` look handler
+  returned on its first line. Symptom players report as "cannot move while
+  shooting": the view is frozen the whole time the mouse is held. `game.start`
+  and `resume` set it; `pause`, `toMenu` and `gameOver` clear it. `main.js`
+  also read the flag under the wrong name (`pointerLockWanted`).
+- **The input stress test must assert look, not just held flags.** The frozen
+  camera above passed 13/13 because no case ever moved the mouse. Cases now
+  dispatch `mousemove` every frame and require yaw to change, and movement is
+  scored against the plain-walk baseline rather than a bare velocity threshold.
+- **`movementX`/`movementY` are read-only on a constructed `MouseEvent`.** They
+  have to be `Object.defineProperty`-d onto the instance or a synthetic look
+  test silently measures nothing.
+- **Touch pads are `pointer-events:auto` over the canvas.** They are hidden
+  under `(hover: hover) and (pointer: fine)` so they cannot swallow desktop
+  clicks; `#btn-pause` deliberately stays.
 - **String `.replace()` in the build must use a function.** `$&` in a replacement
   string means "insert the match", and minified JS contains `$&`.
 

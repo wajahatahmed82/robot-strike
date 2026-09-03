@@ -142,7 +142,7 @@ document.addEventListener('visibilitychange', () => {
 });
 document.addEventListener('pointerlockchange', () => {
   // Losing the lock mid-game means the player hit Esc or tabbed away.
-  if (!document.pointerLockElement && game.state === STATE.PLAY && input.pointerLockWanted) game.pause();
+  if (!document.pointerLockElement && game.state === STATE.PLAY && input.wantPointerLock) game.pause();
 });
 
 let last = performance.now();

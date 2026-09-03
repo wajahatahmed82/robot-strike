@@ -136,6 +136,13 @@ body{
   right:calc(env(safe-area-inset-right) + 16px);top:calc(env(safe-area-inset-top) + 52px);
   bottom:auto;letter-spacing:0}
 
+/* On a mouse-and-keyboard machine the touch pads are dead weight sitting on
+   top of the canvas, where they swallow clicks meant for the game. The pause
+   pad stays because it is the only way back to the menu without Escape. */
+@media (hover: hover) and (pointer: fine) {
+  #btn-fire,#btn-ads,#btn-crouch,#btn-jump,#btn-reload,#btn-swap{display:none}
+}
+
 #stick{position:absolute;width:0;height:0;opacity:0;transition:opacity .12s}
 #stick.on{opacity:1}
 #stick i{position:absolute;display:block;border-radius:50%;pointer-events:none}

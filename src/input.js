@@ -65,6 +65,7 @@ export class Input {
 
     this.pointerLocked = false;
     this.wantPointerLock = false;
+    this.swallowMove = false;
     this.invertY = false;
     this.enabled = true;
 
@@ -116,8 +117,14 @@ export class Input {
       if (!this.enabled) return;
       e.preventDefault();
       this.mouseButtons.add(e.button);
+      // Mouse look only exists under pointer lock, so the lock has to be
+      // requested from a real gesture. If the browser refuses it, the
+      // drag-look fallback in the mousemove handler keeps the game aimable.
       if (!this.pointerLocked && this.wantPointerLock && c.requestPointerLock) {
-        c.requestPointerLock();
+        try {
+          const p = c.requestPointerLock();
+          if (p && p.catch) p.catch(() => {});
+        } catch (_) { /* fallback handles it */ }
       }
     }, opt);
     const releaseButton = (e) => { this.mouseButtons.delete(e.button); };
@@ -184,9 +191,16 @@ export class Input {
       // Losing the lock means the buttons will never report their release.
       if (this.pointerLocked && !locked) this.mouseButtons.clear();
       this.pointerLocked = locked;
+      // The first move after the lock engages carries the jump from the old
+      // cursor position and would snap the view.
+      this.swallowMove = true;
     });
     document.addEventListener('mousemove', (e) => {
-      if (!this.pointerLocked || !this.enabled) return;
+      if (!this.enabled) return;
+      // Locked: every move is look. Unlocked: only drag with a button held,
+      // so a cursor crossing the page in a menu never turns the camera.
+      if (!this.pointerLocked && this.mouseButtons.size === 0) return;
+      if (this.swallowMove) { this.swallowMove = false; return; }
       this.dx += e.movementX;
       this.dy += e.movementY;
     });

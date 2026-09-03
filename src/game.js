@@ -125,6 +125,7 @@ export class Game {
     this.state = STATE.PLAY;
     this.input.reset();
     this.input.enabled = true;
+    this.input.wantPointerLock = true;
     audio.unlock();
     this.breakT = 2.0;
     this.onStateChange(this.state);
@@ -134,6 +135,7 @@ export class Game {
     if (this.state !== STATE.PLAY) return;
     this.state = STATE.PAUSED;
     this.input.enabled = false;
+    this.input.wantPointerLock = false;
     if (document.pointerLockElement) document.exitPointerLock();
     this.onStateChange(this.state);
   }
@@ -143,12 +145,14 @@ export class Game {
     this.state = STATE.PLAY;
     this.input.reset();
     this.input.enabled = true;
+    this.input.wantPointerLock = true;
     this.onStateChange(this.state);
   }
 
   toMenu() {
     this.state = STATE.MENU;
     this.input.enabled = false;
+    this.input.wantPointerLock = false;
     if (document.pointerLockElement) document.exitPointerLock();
     this.onStateChange(this.state);
   }
@@ -372,6 +376,7 @@ export class Game {
     if (this.state === STATE.OVER) return;
     this.state = STATE.OVER;
     this.input.enabled = false;
+    this.input.wantPointerLock = false;
     if (document.pointerLockElement) document.exitPointerLock();
     audio.sfx.gameOver();
 

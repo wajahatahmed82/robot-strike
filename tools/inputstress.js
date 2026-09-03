@@ -25,6 +25,14 @@ function mouseDown(canvas, button) {
 function mouseUp(button) {
   window.dispatchEvent(new MouseEvent('mouseup', { button, bubbles: true, cancelable: true }));
 }
+// movementX/Y are read-only accessors on a constructed MouseEvent, so they have
+// to be defined on the instance for the look path to see anything.
+function mouseMove(mx, my) {
+  const e = new MouseEvent('mousemove', { bubbles: true });
+  Object.defineProperty(e, 'movementX', { value: mx });
+  Object.defineProperty(e, 'movementY', { value: my });
+  document.dispatchEvent(e);
+}
 
 export function run(rs, opts = {}) {
   const { game, input, step, MODE, prog } = rs;
@@ -37,6 +45,11 @@ export function run(rs, opts = {}) {
 
   game.start(MODE.SURVIVAL);
   game.player.state.health = 1e6;          // survive the whole sweep
+  // Real play runs under pointer lock, and the lock cannot be granted from a
+  // script. Stand it up by hand so the look path under test is the one players
+  // actually use; the unlocked drag fallback gets its own case below.
+  const lockWas = input.pointerLocked;
+  input.pointerLocked = true;
 
   const press = (spec) => {
     for (const k of spec.keys || []) keyDown(KEY[k] || k);
@@ -47,6 +60,10 @@ export function run(rs, opts = {}) {
     for (const b of spec.buttons || []) mouseUp(b);
   };
 
+  let baseline = null;
+
+  // `look` is appended to every case: the camera must never be frozen by any
+  // combination of held actions.
   const cases = [
     { name: 'W',                         keys: ['W'],                       buttons: [],     expect: ['move'] },
     { name: 'W + Shift',                 keys: ['W', 'Shift'],              buttons: [],     expect: ['move', 'sprint'] },
@@ -64,6 +81,7 @@ export function run(rs, opts = {}) {
   ];
 
   for (const c of cases) {
+    if (!c.expect.includes('look')) c.expect.push('look');
     input.releaseAll();
     game.player.state.x = 0; game.player.state.z = 6;
     game.player.state.vx = 0; game.player.state.vz = 0;
@@ -81,13 +99,18 @@ export function run(rs, opts = {}) {
     // Observe across many frames: a bug that only bites after the first frame
     // (a latch that never clears) has to be caught too.
     const seen = { move: false, sprint: false, fire: false, aim: false,
-                   crouch: false, jump: false, reload: false, switch: false };
+                   crouch: false, jump: false, reload: false, switch: false,
+                   look: false };
     let shotsAtStart = game.weapons.shotsFired;
     let jumped = false;
     let reloadSeen = false;
 
+    const yawStart = game.player.state.yaw;
     for (let i = 0; i < frames; i++) {
       const wasGrounded = game.player.state.grounded;
+      // Look must survive every other action. Aiming that dies while the
+      // trigger is held is exactly the failure this file exists to catch.
+      mouseMove(6, 0);
       step(1 / 60);
       const p = game.player.state;
       if (Math.hypot(p.vx, p.vz) > 0.4) seen.move = true;
@@ -103,6 +126,15 @@ export function run(rs, opts = {}) {
     seen.switch = game.weapons.current !== before.weapon;
 
     const moved = Math.hypot(game.player.state.x - before.x, game.player.state.z - before.z);
+    const yawDelta = Math.abs(game.player.state.yaw - yawStart);
+    seen.look = yawDelta > 0.05;
+    // Every case holds a movement key, so every case must travel at least most
+    // of the plain-walk baseline. A velocity threshold alone let a case that
+    // crawled at a fifth of walking speed report a pass.
+    if (baseline !== null && c.expect.includes('move') && moved < baseline * 0.45) {
+      seen.move = false;
+    }
+    if (baseline === null && c.name === 'W') baseline = moved;
     const missing = c.expect.filter((k) => !seen[k]);
     // Anything not asked for must not have latched on by itself.
     const stray = Object.keys(seen).filter((k) => seen[k] && !c.expect.includes(k)
@@ -114,6 +146,7 @@ export function run(rs, opts = {}) {
       missing,
       stray,
       movedMetres: +moved.toFixed(2),
+      yawRadians: +yawDelta.toFixed(3),
     });
 
     release(c);
@@ -127,6 +160,29 @@ export function run(rs, opts = {}) {
     if (stuck.length) results[results.length - 1].stuckAfterRelease = stuck;
   }
 
+  // ---- unlocked drag-look fallback, for browsers that refuse pointer lock ----
+  input.pointerLocked = false;
+  input.releaseAll();
+  {
+    const yaw0 = game.player.state.yaw;
+    mouseDown(canvas, 0);
+    for (let i = 0; i < 10; i++) { mouseMove(8, 0); step(1 / 60); }
+    const dragYaw = Math.abs(game.player.state.yaw - yaw0);
+    mouseUp(0);
+    // A cursor crossing the page with no button held must not turn the camera.
+    const yaw1 = game.player.state.yaw;
+    for (let i = 0; i < 10; i++) { mouseMove(8, 0); step(1 / 60); }
+    const idleYaw = Math.abs(game.player.state.yaw - yaw1);
+    results.push({
+      case: 'Unlocked drag-look while firing',
+      pass: dragYaw > 0.05 && idleYaw < 0.001,
+      missing: dragYaw > 0.05 ? [] : ['look'],
+      stray: idleYaw < 0.001 ? [] : ['look-without-button'],
+      yawRadians: +dragYaw.toFixed(3),
+    });
+  }
+
+  input.pointerLocked = lockWas;
   input.releaseAll();
   const failed = results.filter((r) => !r.pass || r.stuckAfterRelease || (r.stray && r.stray.length));
   return { total: results.length, passed: results.length - failed.length, failed, results };
