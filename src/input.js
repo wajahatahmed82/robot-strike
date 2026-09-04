@@ -85,6 +85,18 @@ export class Input {
   set reloadQueued(v) { if (v) this.queue.reload++; }
   set switchQueued(v) { if (v) this.queue.switchTo = v; }
 
+  // Pointer lock can only be granted from a user gesture. Starting or resuming
+  // the game happens inside a button click, which is one -- so ask there, and
+  // the player never has to click the world before the mouse turns the view.
+  requestLock() {
+    const c = this.canvas;
+    if (this.pointerLocked || !this.wantPointerLock || !c.requestPointerLock) return;
+    try {
+      const p = c.requestPointerLock();
+      if (p && p.catch) p.catch(() => {});
+    } catch (_) { /* the unlocked fallback covers it */ }
+  }
+
   _bind() {
     const c = this.canvas;
     const opt = { passive: false };
@@ -120,12 +132,7 @@ export class Input {
       // Mouse look only exists under pointer lock, so the lock has to be
       // requested from a real gesture. If the browser refuses it, the
       // drag-look fallback in the mousemove handler keeps the game aimable.
-      if (!this.pointerLocked && this.wantPointerLock && c.requestPointerLock) {
-        try {
-          const p = c.requestPointerLock();
-          if (p && p.catch) p.catch(() => {});
-        } catch (_) { /* fallback handles it */ }
-      }
+      this.requestLock();
     }, opt);
     const releaseButton = (e) => { this.mouseButtons.delete(e.button); };
     window.addEventListener('mouseup', releaseButton);
@@ -196,10 +203,11 @@ export class Input {
       this.swallowMove = true;
     });
     document.addEventListener('mousemove', (e) => {
+      // Moving the mouse aims, with nothing held down. `enabled` is the gate:
+      // it is false in menus and while paused, so a cursor crossing a menu can
+      // never turn the camera. This runs locked or not, so the view still aims
+      // on a browser that refuses pointer lock.
       if (!this.enabled) return;
-      // Locked: every move is look. Unlocked: only drag with a button held,
-      // so a cursor crossing the page in a menu never turns the camera.
-      if (!this.pointerLocked && this.mouseButtons.size === 0) return;
       if (this.swallowMove) { this.swallowMove = false; return; }
       this.dx += e.movementX;
       this.dy += e.movementY;

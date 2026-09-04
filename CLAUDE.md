@@ -59,6 +59,14 @@ Live: https://wajahatahmed82.github.io/robot-strike/
   shooting": the view is frozen the whole time the mouse is held. `game.start`
   and `resume` set it; `pause`, `toMenu` and `gameOver` clear it. `main.js`
   also read the flag under the wrong name (`pointerLockWanted`).
+- **Pointer lock must be requested from the gesture that starts the game.**
+  Asking only on a canvas mousedown means the player has to click the world
+  once before the mouse aims anything, which reads as "the character does not
+  turn". `game.start` and `resume` run inside the menu button's click handler,
+  which is a valid gesture, so `input.requestLock()` is called there.
+- **Mouse look must not require a held button.** `enabled` is the only gate:
+  false in menus and while paused, true in play. Gating on a held button
+  instead means the view only turns while shooting.
 - **The input stress test must assert look, not just held flags.** The frozen
   camera above passed 13/13 because no case ever moved the mouse. Cases now
   dispatch `mousemove` every frame and require yaw to change, and movement is

@@ -126,6 +126,9 @@ export class Game {
     this.input.reset();
     this.input.enabled = true;
     this.input.wantPointerLock = true;
+    // start() is called from a button click, which is the gesture the browser
+    // needs; asking here means the mouse aims from the first frame.
+    this.input.requestLock();
     audio.unlock();
     this.breakT = 2.0;
     this.onStateChange(this.state);
@@ -146,6 +149,7 @@ export class Game {
     this.input.reset();
     this.input.enabled = true;
     this.input.wantPointerLock = true;
+    this.input.requestLock();
     this.onStateChange(this.state);
   }
 

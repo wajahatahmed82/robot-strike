@@ -160,25 +160,35 @@ export function run(rs, opts = {}) {
     if (stuck.length) results[results.length - 1].stuckAfterRelease = stuck;
   }
 
-  // ---- unlocked drag-look fallback, for browsers that refuse pointer lock ----
+  // ---- free look: the mouse aims with nothing held, locked or not ----
   input.pointerLocked = false;
   input.releaseAll();
   {
     const yaw0 = game.player.state.yaw;
-    mouseDown(canvas, 0);
     for (let i = 0; i < 10; i++) { mouseMove(8, 0); step(1 / 60); }
-    const dragYaw = Math.abs(game.player.state.yaw - yaw0);
-    mouseUp(0);
-    // A cursor crossing the page with no button held must not turn the camera.
-    const yaw1 = game.player.state.yaw;
-    for (let i = 0; i < 10; i++) { mouseMove(8, 0); step(1 / 60); }
-    const idleYaw = Math.abs(game.player.state.yaw - yaw1);
+    const freeYaw = Math.abs(game.player.state.yaw - yaw0);
     results.push({
-      case: 'Unlocked drag-look while firing',
-      pass: dragYaw > 0.05 && idleYaw < 0.001,
-      missing: dragYaw > 0.05 ? [] : ['look'],
-      stray: idleYaw < 0.001 ? [] : ['look-without-button'],
-      yawRadians: +dragYaw.toFixed(3),
+      case: 'Unlocked free look, nothing held',
+      pass: freeYaw > 0.05,
+      missing: freeYaw > 0.05 ? [] : ['look'],
+      stray: [],
+      yawRadians: +freeYaw.toFixed(3),
+    });
+  }
+  {
+    // ...but a cursor crossing a menu must never turn the camera. `enabled` is
+    // the only thing separating the two cases, so it has to be tested.
+    input.enabled = false;
+    const yaw0 = game.player.state.yaw;
+    for (let i = 0; i < 10; i++) { mouseMove(8, 0); step(1 / 60); }
+    const menuYaw = Math.abs(game.player.state.yaw - yaw0);
+    input.enabled = true;
+    results.push({
+      case: 'No look while input disabled (menu/paused)',
+      pass: menuYaw < 0.001,
+      missing: [],
+      stray: menuYaw < 0.001 ? [] : ['look-while-disabled'],
+      yawRadians: +menuYaw.toFixed(4),
     });
   }
 
