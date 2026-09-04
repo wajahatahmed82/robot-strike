@@ -1,0 +1,125 @@
+// Walk test.
+//
+// A level that looks right in a screenshot but cannot be walked through is
+// worthless, and collider bugs do not show up in a still. This drives the real
+// player controller -- same collision, same step-up, same gravity -- along the
+// campaign route and reports which legs actually completed.
+//
+// Load in the console:
+//   const w = await import('/tools/walktest.js'); w.run(__rs)
+
+// Waypoints go through the doorways, because that is the route a player takes.
+// A straight line from room centre to room centre walks into walls and proves
+// nothing about whether the level connects.
+// [name, x, z, expectedFloorY]
+// The height matters: without it, standing on the ground floor directly above
+// the basement counts as "reached the basement", and a sealed staircase passes.
+const B = -3.6;
+const ROUTE = [
+  ['spawn',               0, 34, 0],
+  ['gate',                0, 12, 0],
+  ['forecourt',           0, 4, 0],
+  ['main entrance',       0, -2, 0],
+  ['reception',           3, -8, 0],
+  ['reception rear door', 0, -14, 0],
+  ['back of house',       0, -20, 0],
+  ['corridor door E',     6, -26, 0],
+  ['main corridor',       6, -29, 0],
+  ['corridor west',     -20, -29, 0],
+  ['office door',       -20, -25, 0],
+  ['offices',           -20, -14, 0],
+  ['office door out',   -20, -25, 0],
+  ['corridor west 2',   -23, -29, 0],
+  ['storage door',      -23, -32, 0],
+  ['storage',           -23, -40, 0],
+  ['storage south door', -23, -48, 0],
+  ['rear corridor W',   -23, -49, 0],
+  ['rear corridor C',   -12, -49, 0],
+  ['rear corridor mid', -3.5, -49, 0],
+  ['stair top',         -3.5, -52.5, -0.7],
+  ['stair bottom',      -3.5, -59.6, B],
+  ['shaft floor east',     3, -56, B],
+  ['basement door',        0, -47, B],
+  ['basement corridor',    0, -40, B],
+  ['lab door',            -6, -36, B],
+  ['laboratory',         -16, -36, B],
+  ['lab door out',        -6, -36, B],
+  ['armory door',          7, -34, B],
+  ['armory',              16, -36, B],
+  ['armory door out',      7, -34, B],
+  ['back to corridor',     0, -42, B],
+  ['basement door out',    0, -47, B],
+  ['stair bottom 2',    -3.5, -59.6, B],
+  ['stair top 2',       -3.5, -51.5, 0],
+  ['rear corridor E',     16, -49, 0],
+  ['loading bay',         18, -56, 0],
+];
+
+export function run(rs, opts = {}) {
+  const { game, step, MODE } = rs;
+  const maxSeconds = opts.maxSeconds || 26;
+  game.start(MODE.SURVIVAL);
+  game.player.state.health = 1e9;
+  // The route is about the level, not about combat.
+  game.queued = 0; game.waveActive = false; game.breakT = 1e9;
+  for (const r of game.robots) game.scene.remove(r.root);
+  game.robots.length = 0;
+
+  const p = game.player.state;
+  p.x = ROUTE[0][1]; p.z = ROUTE[0][2]; p.y = 0; p.vx = p.vz = p.vy = 0;
+
+  const legs = [];
+  for (let i = 1; i < ROUTE.length; i++) {
+    const [name, tx, tz, ty] = ROUTE[i];
+    const startX = p.x, startZ = p.z;
+    let t = 0, reached = false, minD = Infinity;
+    let stuckFor = 0, lastD = Infinity;
+    let slideDir = 1, slideFlips = 0;
+
+    while (t < maxSeconds) {
+      const dx = tx - p.x, dz = tz - p.z;
+      const d = Math.hypot(dx, dz);
+      minD = Math.min(minD, d);
+      // Both horizontally there and on the right floor.
+      if (d < 1.4 && Math.abs(p.y - ty) < 1.2) { reached = true; break; }
+      // Steer at the target; yaw 0 looks down -Z. When progress stalls, strafe
+      // for a moment -- a player walks around a desk rather than giving up, and
+      // a test that gives up reports furniture as a broken level.
+      p.yaw = Math.atan2(-dx, -dz);
+      const strafing = stuckFor > 0.25;
+      game.player.step(1 / 60, {
+        moveX: strafing ? slideDir : 0, moveY: strafing ? -0.35 : -1,
+        lookDX: 0, lookDY: 0,
+        jump: false, crouch: false, sprint: false,
+      }, 0);
+      if (Math.abs(lastD - d) < 0.004) {
+        stuckFor += 1 / 60;
+        if (stuckFor > 1.6) { slideDir = -slideDir; stuckFor = 0.3; slideFlips++; }
+      } else if (!strafing) stuckFor = 0;
+      lastD = d;
+      if (slideFlips > 6) break;
+      t += 1 / 60;
+    }
+    legs.push({
+      leg: ROUTE[i - 1][0] + ' -> ' + name,
+      reached,
+      seconds: +t.toFixed(1),
+      closestApproach: +minD.toFixed(2),
+      expectedY: ty,
+      endedAt: [+p.x.toFixed(1), +p.y.toFixed(2), +p.z.toFixed(1)],
+      travelled: +Math.hypot(p.x - startX, p.z - startZ).toFixed(1),
+    });
+    if (!reached) {
+      // Teleport past the blockage so later legs still get tested; the failure
+      // is already recorded.
+      p.x = tx; p.z = tz; p.y = ty; p.vx = p.vz = p.vy = 0;
+      for (let k = 0; k < 30; k++) {
+        game.player.step(1 / 60, { moveX: 0, moveY: 0, lookDX: 0, lookDY: 0,
+          jump: false, crouch: false, sprint: false }, 0);
+      }
+    }
+  }
+
+  const failed = legs.filter((l) => !l.reached);
+  return { total: legs.length, passed: legs.length - failed.length, failed, legs };
+}

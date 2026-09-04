@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { CFG } from './config.js';
 import { buildScene } from './scene.js';
+import { Campaign } from './campaign.js';
 import { WeaponSystem, VIEW_LAYER } from './weapons.js';
 import { Player } from './player.js';
 import { Robot, pickType, STATE as AI } from './enemies.js';
@@ -9,7 +10,7 @@ import * as audio from './audio.js';
 import * as settings from './settings.js';
 
 export const STATE = { MENU: 'menu', PLAY: 'play', PAUSED: 'paused', OVER: 'over' };
-export const MODE = { SURVIVAL: 'survival', TIME: 'timeattack' };
+export const MODE = { CAMPAIGN: 'campaign', SURVIVAL: 'survival', TIME: 'timeattack' };
 
 export class Game {
   constructor(renderer, input, progression) {
@@ -27,7 +28,17 @@ export class Game {
     this.spawnPoint = built.spawn;
     this.scene.add(this.camera);
 
-    this.player = new Player(this.camera, this.colliders, built.spawn);
+    this.player = new Player(this.camera, this.colliders, built.spawn, built.voids);
+    this.areas = built.areas;
+    this.anchors = built.anchors;
+    this.voids = built.voids;
+    this.mats = built.mats;
+    this.glowMesh = built.glowMesh;
+    this.powered = false;
+    this.campaign = new Campaign(this);
+    this.onPrompt = () => {};
+    this.onDown = () => {};
+    this.difficulty = 'normal';
     this.weapons = new WeaponSystem(this.camera, audio.sfx, built.mats, progression);
     this.fx = new FX(this.scene, this.camera);
 
@@ -131,6 +142,13 @@ export class Game {
     this.input.requestLock();
     audio.unlock();
     this.breakT = 2.0;
+    if (this.mode === MODE.CAMPAIGN) {
+      // No wave director in the campaign: soldiers are placed by objective, and
+      // the level starts empty.
+      this.waveActive = false; this.queued = 0; this.breakT = 1e9;
+      this.setPowered(false);
+      this.campaign.start(this.difficulty || 'normal');
+    }
     this.onStateChange(this.state);
   }
 
@@ -377,6 +395,13 @@ export class Game {
   }
 
   gameOver() {
+    // In the campaign, dying reloads the last checkpoint. The whole point of
+    // checkpoints is that death is not a restart.
+    if (this.mode === MODE.CAMPAIGN && this.campaign.hasCheckpoint() && this.state === STATE.PLAY) {
+      this.onDown();
+      this.reloadCheckpoint();
+      return;
+    }
     if (this.state === STATE.OVER) return;
     this.state = STATE.OVER;
     this.input.enabled = false;
@@ -466,7 +491,9 @@ export class Game {
     }
 
     // ---- mode logic ----
-    if (this.mode === MODE.TIME) {
+    if (this.mode === MODE.CAMPAIGN) {
+      this._campaignFlow(dt, inp);
+    } else if (this.mode === MODE.TIME) {
       this.timeLeft -= dt;
       if (this.timeLeft <= 0) { this.timeLeft = 0; this.gameOver(); return; }
       this._timeAttackFlow(dt);
@@ -481,6 +508,59 @@ export class Game {
     }
   }
 
+  _campaignFlow(dt, inp) {
+    const p = this.player.state;
+
+    // Falling out of the world is recoverable, not fatal: a hole in a slab
+    // should cost a checkpoint reload, never an endless drop.
+    if (p.y < -30) { this.reloadCheckpoint(); return; }
+
+    this.campaign.update(dt);
+
+    // interaction prompt + use
+    const item = this.campaign.interact.pick(this.camera, p);
+    if (item) {
+      const locked = item.needs && this.campaign.keycard < item.needs;
+      this.onPrompt(locked ? (item.lockedPrompt || 'LOCKED') : item.prompt, locked);
+    } else {
+      this.onPrompt(null, false);
+    }
+    if (inp && inp.interact && item && !this._interactHeld) {
+      const r = this.campaign.interact.use(item, { keycard: this.campaign.keycard });
+      if (!r.ok && r.message) this.onPrompt(r.message, true);
+      else if (r.ok) audio.sfx.ui && audio.sfx.ui();
+    }
+    this._interactHeld = !!(inp && inp.interact);
+  }
+
+  // Floor height for placing a soldier: the campaign puts some of them in the
+  // basement, where y=0 would leave them standing in the ceiling.
+  floorAt(x, z) {
+    return this.player.groundAt(x, z, 1.0);
+  }
+
+  setPowered(on) {
+    this.powered = on;
+    // Emissive strips are one merged mesh per colour; brightening the material
+    // is the whole lighting change and costs nothing per frame.
+    if (this.glowMesh && this.glowMesh.warm) {
+      this.glowMesh.warm.material.color.setHex(on ? 0xffd9a0 : 0x6a4a24);
+    }
+  }
+
+  grantAmmo() {
+    const w = this.weapons;
+    for (const id of Object.keys(w.reserve)) w.reserve[id] += CFG.weapons[id].reserve;
+  }
+
+  reloadCheckpoint() {
+    if (!this.campaign.hasCheckpoint()) { this.gameOver(); return; }
+    this.state = STATE.PLAY;
+    this.campaign.restore();
+    this.hurtT = 0;
+    this.onStateChange(this.state);
+  }
+
   _ctx() {
     if (!this._ctxCache) {
       this._ctxCache = {
@@ -489,10 +569,21 @@ export class Game {
         canSee: (from, ps) => this.canSee(from, ps),
         blocked: (x, z) => this.blockedAt(x, z),
         onAttack: (dmg, origin, dir, robot) => this.robotAttack(dmg, origin, dir, robot),
+        onSpotted: (robot) => this.alertNear(robot.root.position, 16, true),
       };
     }
     this._ctxCache.player = this.player.state;
     return this._ctxCache;
+  }
+
+  // A shot, a shout or a body pulls nearby soldiers in to look. They
+  // investigate the position rather than teleporting onto the player.
+  alertNear(pos, radius, hard) {
+    for (const r of this.robots) {
+      if (r.dead) continue;
+      const d = Math.hypot(r.root.position.x - pos.x, r.root.position.z - pos.z);
+      if (d <= radius) r.alertTo(pos.x, pos.z, hard && d < radius * 0.6);
+    }
   }
 
   _survivalFlow(dt) {

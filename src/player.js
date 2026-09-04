@@ -11,9 +11,13 @@ import { CFG } from './config.js';
 const STEP_UP = 0.46;     // auto-climb height, so kerbs and low crates are free
 
 export class Player {
-  constructor(camera, colliders, spawn) {
+  constructor(camera, colliders, spawn, voids) {
     this.camera = camera;
     this.colliders = colliders;
+    // Inside a void the outdoor ground plane does not exist, so the floor comes
+    // only from real slab colliders. Without this the basement is unreachable:
+    // the player would stand on invisible ground at y=0.
+    this.voids = voids || [];
     this.spawn = spawn || { x: 0, z: 0 };
 
     this.state = {
@@ -59,10 +63,17 @@ export class Player {
     return THREE.MathUtils.lerp(CFG.camera.standHeight, CFG.camera.crouchHeight, this.state.crouch);
   }
 
+  inVoid(x, z) {
+    for (const v of this.voids) {
+      if (x > v.minX && x < v.maxX && z > v.minZ && z < v.maxZ) return true;
+    }
+    return false;
+  }
+
   // Highest surface directly under (x,z) that is at or below the feet.
   groundAt(x, z, feetY) {
     const r = CFG.player.radius;
-    let best = 0;
+    let best = this.inVoid(x, z) ? -60 : 0;
     for (const c of this.colliders) {
       if (x + r <= c.minX || x - r >= c.maxX || z + r <= c.minZ || z - r >= c.maxZ) continue;
       if (c.top <= feetY + STEP_UP && c.top > best) best = c.top;

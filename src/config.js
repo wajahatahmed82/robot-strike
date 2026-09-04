@@ -30,7 +30,10 @@ export const CFG = {
     jumpSpeed: 5.0,
     gravity: 18,
     radius: 0.40,
-    arenaRadius: 54,
+    // Far safety net only. The facility walls and perimeter fence do the real
+    // containment; at 54 this circular leash cut across the stair shaft and
+    // stopped the player halfway down to the basement.
+    arenaRadius: 130,
     eyeToTop: 0.18,        // headroom above the eye for ceiling checks
   },
 
@@ -87,29 +90,34 @@ export const CFG = {
       // a new player inside wave 1. Wave 1 has to be winnable.
       name: 'RECON', health: 55, speed: 3.9, damage: 5, attackRange: 3.0,
       attackCd: 0.95, score: 100, xp: 10, colour: 0x4fd6ff, scale: 0.86,   // ~1.73m
-      ranged: false, sightRange: 70, wave: 1,
+      ranged: false, sightRange: 26, wave: 1,
+      reaction: 0.85, spread: 0.05, visionCone: 1.20,
     },
     assault: {
       name: 'RIFLEMAN', health: 130, speed: 3.0, damage: 7, attackRange: 20,
       attackCd: 1.8, score: 150, xp: 18, colour: 0xffb03a, scale: 0.90,   // ~1.81m
-      ranged: true, burst: 3, sightRange: 80, wave: 2,
+      ranged: true, burst: 3, sightRange: 34, wave: 2,
+      reaction: 0.95, spread: 0.075, visionCone: 1.10,
     },
     heavy: {
       name: 'GUNNER', health: 420, speed: 1.7, damage: 20, attackRange: 14,
       attackCd: 2.3, score: 300, xp: 45, colour: 0xff4d3d, scale: 0.97,   // ~1.95m, bulk gives the presence
-      ranged: true, burst: 2, sightRange: 70, wave: 4,
+      ranged: true, burst: 2, sightRange: 30, wave: 4,
+      reaction: 1.25, spread: 0.10, visionCone: 1.00,
     },
     sniper: {
       name: 'MARKSMAN', health: 95, speed: 2.6, damage: 34, attackRange: 55,
       attackCd: 3.2, score: 400, xp: 55, colour: 0x8ad6a0, scale: 0.90,   // ~1.81m
-      ranged: true, burst: 1, sightRange: 110, wave: 5,
+      ranged: true, burst: 1, sightRange: 60, wave: 5,
+      reaction: 1.5, spread: 0.030, visionCone: 0.85,
       keepDistance: 26,        // backs off if the player closes
       telegraph: 0.9,          // laser settles before the shot, so it is dodgeable
     },
     elite: {
       name: 'OPERATOR', health: 260, speed: 4.2, damage: 14, attackRange: 22,
       attackCd: 1.15, score: 500, xp: 70, colour: 0xc45cff, scale: 0.91,   // ~1.83m
-      ranged: true, burst: 4, sightRange: 95, wave: 6, smart: true,
+      ranged: true, burst: 4, sightRange: 32, wave: 6,
+      reaction: 0.7, spread: 0.055, visionCone: 1.25, smart: true,
     },
   },
 
@@ -139,6 +147,15 @@ export const CFG = {
 };
 
 // Cold industrial facility: blue-grey steel, sodium work lights, red hazard.
+// Difficulty changes how soldiers behave, not how much health they have.
+// Multiplying hitpoints makes a fight longer, not harder, and makes every
+// weapon feel weaker -- which is the opposite of the intent.
+export const DIFFICULTY = {
+  easy:   { name: 'EASY',   accuracy: 0.55, reaction: 1.7, awareness: 0.6, damage: 0.6 },
+  normal: { name: 'NORMAL', accuracy: 1.0,  reaction: 1.0, awareness: 1.0, damage: 1.0 },
+  hard:   { name: 'HARD',   accuracy: 1.6,  reaction: 0.6, awareness: 1.5, damage: 1.45 },
+};
+
 export const PAL = {
   skyTop: 0x1c2a38,
   skyMid: 0x44586a,

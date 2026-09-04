@@ -97,6 +97,18 @@ Live: https://wajahatahmed82.github.io/robot-strike/
 - **Thigh radius must stay under the half-stance width.** At ±0.10 with a
   0.119 radius the two legs meet at the crotch and the silhouette reads as a
   skirt.
+- **A level that screenshots well can still be unwalkable.** `tools/walktest.js`
+  drives the real player controller along the campaign route. It found three
+  faults no still would show: a leftover `arenaRadius: 54` leash cutting across
+  the stair shaft, stair treads centred so the first step down was a step up,
+  and a basement sealed off because the staircase descends south while the only
+  door was north -- the player would have had to walk back under the flight.
+- **A reachability test must check height, not just X/Z.** Standing on the
+  ground floor directly above the basement satisfied a 2D distance check, so a
+  sealed staircase passed.
+- **Enemy sight ranges were tuned for an open arena.** 70-110m indoors means
+  being shot from across the building the moment you step into a corridor.
+  Campaign values are 26-60m with a vision cone.
 - **String `.replace()` in the build must use a function.** `$&` in a replacement
   string means "insert the match", and minified JS contains `$&`.
 
@@ -127,6 +139,22 @@ of one man.
 `poseSoldier()` is a single blended pose function, not a clip switcher: walk,
 aim, recoil, flinch and death are weights that all apply in the same frame.
 Distant soldiers (>26m) pose every third frame and stop casting shadows.
+
+## Campaign
+
+`src/campaign.js` holds mission 1 as data: a list of objectives, each with an
+`enter` that dresses the world and a `done` that tests completion. Soldiers are
+placed by objective, never spawned by a wave director, and the level contains
+none at all until objective 5. `src/interact.js` is the [E] system; `src/facility.js`
+builds the location.
+
+The basement only works because `Player.groundAt` takes a list of `voids`: the
+building interior is a region where the outdoor ground plane does not exist and
+the floor comes from real slab colliders. Without it the player stands on
+invisible ground at y=0 above the basement.
+
+    const c = await import('/tools/campaigntest.js'); c.run(__rs)   // 25 checks
+    const w = await import('/tools/walktest.js');    w.run(__rs)    // route
 
 ## Input
 

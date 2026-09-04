@@ -53,6 +53,20 @@ export class Enemy {
     this.patrolTarget = null;
     this.hitFlash = 0;
     this.deathSpin = (Math.random() < 0.5 ? -1 : 1) * (0.4 + Math.random() * 0.6);
+    // Campaign behaviour. A soldier stands a post or walks a route and only
+    // engages once it has actually noticed the player; nothing here converges
+    // on the player by default.
+    this.duty = 'guard';          // guard | patrol | desk | inspect
+    this.post = new THREE.Vector3(x, 0, z);
+    this.postYaw = 0;
+    this.route = null;
+    this.routeIdx = 0;
+    this.routeWait = 0;
+    this.alerted = false;
+    this.awareness = 0;
+    this.reactT = 0;
+    this.idleLook = Math.random() * Math.PI * 2;
+    this.diff = { accuracy: 1, reaction: 1, awareness: 1, damage: 1 };
     this.losPhase = (nextId * 7) % 3;
     this.losCache = false;
     this.losAge = 99;
@@ -137,6 +151,8 @@ export class Enemy {
     this.hitT = 1;
     this.hitSide = Math.random() < 0.5 ? -1 : 1;
     // Being shot always reveals the player, even from behind cover.
+    this.alerted = true;
+    this.awareness = 1;
     if (this.state === STATE.IDLE || this.state === STATE.PATROL) {
       this.state = STATE.ALERT;
       this.stateT = 0;
@@ -164,6 +180,7 @@ export class Enemy {
 
     let canSee;
     this.losAge += dt;
+    this.reactT = Math.max(0, this.reactT - dt);
     if (dist > this.spec.sightRange) {
       canSee = false;
       this.losCache = false;
@@ -173,6 +190,36 @@ export class Enemy {
       this.losAge = 0;
     } else {
       canSee = this.losCache;
+    }
+
+    // ---- noticing the player ----
+    // Line of sight alone is not detection. A soldier has to be facing roughly
+    // the right way, and awareness builds over time so the player can break
+    // contact, stay low, or move behind them. Without this every encounter
+    // starts the instant a pixel of the player is visible.
+    if (canSee) {
+      const fwd = this.root.rotation.y;
+      const toA = Math.atan2(dx, dz);
+      let off = toA - fwd;
+      while (off > Math.PI) off -= Math.PI * 2;
+      while (off < -Math.PI) off += Math.PI * 2;
+      const inCone = Math.abs(off) < (this.spec.visionCone || 1.15);
+      if (inCone && !this.alerted) {
+        // Closer, upright and moving all make the player easier to notice.
+        const near = 1 - Math.min(1, dist / this.spec.sightRange);
+        const crouched = p.crouch > 0.5 ? 0.45 : 1;
+        const moving = Math.hypot(p.vx || 0, p.vz || 0) > 2.2 ? 1.35 : 1;
+        this.awareness += dt * (0.55 + near * 1.5) * crouched * moving * this.diff.awareness;
+        if (this.awareness >= 1) {
+          this.awareness = 1;
+          this.alerted = true;
+          if (ctx.onSpotted) ctx.onSpotted(this);
+        }
+      } else if (!this.alerted && !inCone) {
+        this.awareness = Math.max(0, this.awareness - dt * 0.25);
+      }
+    } else if (!this.alerted) {
+      this.awareness = Math.max(0, this.awareness - dt * 0.5);
     }
 
     if (canSee) { this.lastSeen.set(p.x, 0, p.z); this.sawAt = 0; }
@@ -197,14 +244,16 @@ export class Enemy {
 
     switch (this.state) {
       case S2.IDLE:
-        if (canSee) this._set(S2.ALERT);
-        else if (this.stateT > 1.2) this._set(S2.PATROL);
+        // Stands its post. Only a real detection pulls it off.
+        if (this.alerted) this._set(S2.ALERT);
         break;
       case S2.PATROL:
-        if (canSee) this._set(S2.ALERT);
+        if (this.alerted) this._set(S2.ALERT);
         break;
       case S2.ALERT:
-        if (this.stateT > 0.45) this._set(S2.CHASE);
+        // Reaction delay: a soldier that snaps to a perfect shot the instant
+        // it sees you is what makes a game feel unfair rather than hard.
+        if (this.stateT > this.spec.reaction * this.diff.reaction) this._set(S2.CHASE);
         break;
       case S2.CHASE:
         if (canSee && dist <= this.spec.attackRange) this._set(S2.ATTACK);
@@ -216,8 +265,8 @@ export class Enemy {
         else if (smart && hurtBadly && this.stateT > 1.2) this._set(S2.RETREAT);
         break;
       case S2.SEARCH:
-        if (canSee) this._set(S2.ALERT);
-        else if (this.stateT > 6) this._set(S2.PATROL);
+        if (this.alerted && canSee) this._set(S2.ALERT);
+        else if (this.stateT > 9) { this.alerted = false; this.awareness = 0; this._set(S2.IDLE); }
         break;
       case S2.RETREAT:
         if (this.stateT > 2.6 || this.hp / this.maxHp > 0.55) this._set(S2.CHASE);
@@ -226,6 +275,38 @@ export class Enemy {
   }
 
   _set(s) { this.state = s; this.stateT = 0; }
+
+  // Called on nearby soldiers when something happens: a shot, a body, a
+  // teammate calling out. They investigate rather than teleport onto the
+  // player's position.
+  alertTo(x, z, hard) {
+    if (this.dead) return;
+    this.lastSeen.set(x, 0, z);
+    if (hard) {
+      this.alerted = true;
+      this.awareness = 1;
+      if (this.state === STATE.IDLE || this.state === STATE.PATROL) this._set(STATE.ALERT);
+    } else if (!this.alerted) {
+      this.awareness = Math.min(0.85, this.awareness + 0.5);
+      if (this.state === STATE.IDLE || this.state === STATE.PATROL) this._set(STATE.SEARCH);
+    }
+  }
+
+  // Placement helpers used by the campaign.
+  setPost(x, z, yaw) {
+    this.post.set(x, 0, z);
+    this.postYaw = yaw || 0;
+    this.root.rotation.y = this.postYaw;
+    this.duty = 'guard';
+    this.route = null;
+  }
+
+  setRoute(points) {
+    this.route = points.map((pt) => new THREE.Vector3(pt[0], 0, pt[1]));
+    this.routeIdx = 0;
+    this.duty = 'patrol';
+    this._set(STATE.PATROL);
+  }
 
   _act(dt, ctx, dist, canSee, dx, dz) {
     const S2 = STATE;
@@ -241,21 +322,36 @@ export class Enemy {
     };
 
     if (this.state === S2.PATROL || this.state === S2.IDLE) {
-      // These are attackers with an objective, so patrol converges on the
-      // player's area with a wander offset rather than milling about.
-      const stale = !this.patrolTarget || this.patrolTarget.distanceToSquared(pos) < 9;
-      const drifted = this.patrolTarget &&
-        Math.hypot(this.patrolTarget.x - ctx.player.x, this.patrolTarget.z - ctx.player.z) > 22;
-      if (stale || drifted) {
-        const a = Math.random() * Math.PI * 2;
-        const r = 5 + Math.random() * 9;
-        this.patrolTarget = new THREE.Vector3(
-          ctx.player.x + Math.sin(a) * r, 0, ctx.player.z + Math.cos(a) * r);
+      // Off duty from the player entirely: guards hold a post and glance
+      // around, patrols walk their route. Nothing here steers toward the
+      // player, which is what turned every previous encounter into a rush.
+      if (this.route && this.route.length) {
+        if (this.routeWait > 0) {
+          this.routeWait -= dt;
+          this.idleLook += dt * 0.7;
+          face(Math.sin(this.idleLook), Math.cos(this.idleLook), 1.2);
+        } else {
+          const wp = this.route[this.routeIdx % this.route.length];
+          wantX = wp.x - pos.x; wantZ = wp.z - pos.z;
+          if (Math.hypot(wantX, wantZ) < 1.2) {
+            this.routeIdx++;
+            this.routeWait = 1.2 + Math.random() * 2.5;
+          } else {
+            moving = true;
+            face(wantX, wantZ, 2.2);
+          }
+        }
+      } else {
+        // Holding a post: drift back to it if nudged, and look around.
+        wantX = this.post.x - pos.x; wantZ = this.post.z - pos.z;
+        const d = Math.hypot(wantX, wantZ);
+        if (d > 1.6) { moving = true; face(wantX, wantZ, 2.0); }
+        else {
+          this.idleLook += dt * 0.55;
+          const sweep = this.postYaw + Math.sin(this.idleLook) * 0.9;
+          face(Math.sin(sweep), Math.cos(sweep), 1.4);
+        }
       }
-      wantX = this.patrolTarget.x - pos.x;
-      wantZ = this.patrolTarget.z - pos.z;
-      moving = this.state === S2.PATROL;
-      face(wantX, wantZ, 2.0);
     } else if (this.state === S2.ALERT) {
       face(dx, dz, 5.0);
     } else if (this.state === S2.CHASE) {
@@ -319,7 +415,7 @@ export class Enemy {
   }
 
   _shoot(dt, ctx, dist, canSee) {
-    if (!canSee) return;
+    if (!canSee || !this.alerted) return;
     this.attackCd -= dt;
     if (this.spec.ranged) {
       if (this.burstLeft > 0) {
@@ -334,7 +430,7 @@ export class Enemy {
       }
     } else if (this.attackCd <= 0 && dist <= this.spec.attackRange) {
       this.attackCd = this.spec.attackCd;
-      ctx.onAttack(this.spec.damage, null, null, this);
+      ctx.onAttack(this.spec.damage * this.diff.damage, null, null, this);
     }
   }
 
@@ -344,7 +440,9 @@ export class Enemy {
     const target = new THREE.Vector3(ctx.player.x, ctx.player.y + 1.2, ctx.player.z);
     const dir = target.clone().sub(origin).normalize();
     // accuracy falls off with range, so distant contacts are survivable
-    const miss = THREE.MathUtils.clamp(dist / this.spec.attackRange, 0, 1) * 0.055;
+    // Higher `accuracy` on the difficulty means a tighter cone.
+    const spread = (this.spec.spread || 0.055) / Math.max(0.2, this.diff.accuracy);
+    const miss = THREE.MathUtils.clamp(dist / this.spec.attackRange, 0, 1) * spread + spread * 0.35;
     dir.x += (Math.random() - 0.5) * miss;
     dir.y += (Math.random() - 0.5) * miss;
     dir.z += (Math.random() - 0.5) * miss;
@@ -353,7 +451,7 @@ export class Enemy {
     this.flash.visible = true;
     this.flash.material.opacity = 0.9;
     this.flash.rotation.z = Math.random() * 3;
-    ctx.onAttack(this.spec.damage, origin, dir, this);
+    ctx.onAttack(this.spec.damage * this.diff.damage, origin, dir, this);
   }
 
   _unstick(dt, ctx) {

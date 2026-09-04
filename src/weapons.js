@@ -136,6 +136,21 @@ export class WeaponSystem {
   get spec() { return CFG.weapons[this.current]; }
   get model() { return this.models[this.current]; }
   get mag() { return this.ammo[this.current]; }
+  // Checkpoints restore the loadout as it was, so reloading does not hand the
+  // player a free refill or punish them with an empty gun.
+  snapshot() {
+    return { current: this.current, ammo: { ...this.ammo }, reserve: { ...this.reserve } };
+  }
+
+  restore(s) {
+    if (!s) return;
+    this.current = s.current;
+    this.ammo = { ...s.ammo };
+    this.reserve = { ...s.reserve };
+    this.reloading = 0;
+    this.swapT = 0;
+  }
+
   get pool() { return this.reserve[this.current]; }
   get busy() { return this.reloading > 0 || this.swapT > 0; }
 

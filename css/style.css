@@ -259,3 +259,36 @@ body{
   .btn{padding:9px 16px;min-width:150px;font-size:11px}
   .hint{display:none}
 }
+
+
+/* ---- campaign HUD ---- */
+#objective{position:absolute;left:calc(env(safe-area-inset-left) + 18px);top:76px;
+  max-width:340px;padding:9px 12px;background:rgba(10,15,21,.55);
+  border-left:2px solid var(--amber);backdrop-filter:blur(3px);
+  transition:opacity .35s;pointer-events:none}
+#objective.hidden{opacity:0}
+#objective .oh{display:block;font-size:9px;letter-spacing:.22em;color:#8fa6b8;margin-bottom:3px}
+#objective b{display:block;font-size:13px;letter-spacing:.04em;color:#eef4fa;font-weight:600}
+#objective i{display:block;font-style:normal;font-size:10px;color:#9fb3c4;margin-top:3px}
+#objective.done b{color:var(--amber)}
+
+#prompt{position:absolute;left:50%;bottom:24%;transform:translateX(-50%);
+  display:flex;align-items:center;gap:8px;padding:7px 13px;
+  background:rgba(10,15,21,.62);border:1px solid rgba(255,255,255,.16);
+  font-size:12px;letter-spacing:.08em;color:#eef4fa;transition:opacity .12s;pointer-events:none}
+#prompt.hidden{opacity:0}
+#prompt em{font-style:normal;font-weight:700;font-size:11px;padding:2px 7px;
+  background:#eef4fa;color:#0b1017;border-radius:2px}
+#prompt.locked{border-color:rgba(255,59,48,.6);color:#ff9d95}
+#prompt.locked em{background:#ff3b30;color:#fff}
+
+#log{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+  width:min(560px,84vw);padding:20px 24px;background:rgba(8,12,17,.90);
+  border:1px solid rgba(255,255,255,.14);border-top:2px solid var(--amber);
+  transition:opacity .5s;pointer-events:none}
+#log.hidden{opacity:0}
+#log b{display:block;font-size:12px;letter-spacing:.20em;color:var(--amber);margin-bottom:11px}
+#log #log-lines div{font-size:13px;line-height:1.65;color:#dbe6f0;margin-bottom:5px}
+
+.diffrow{margin:-4px 0 10px;gap:6px}
+.diffrow .btn{min-width:74px}

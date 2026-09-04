@@ -35,6 +35,24 @@ export class HUD {
     this.comboT = 0;
     this.fpsAcc = 0;
     this.panel = 'main';
+    this.difficulty = 'normal';
+    this.objBox = $('objective');
+    this.objText = $('obj-text');
+    this.objHint = $('obj-hint');
+    this.promptBox = $('prompt');
+    this.promptText = $('prompt-text');
+    this.logBox = $('log');
+    this.logTitle = $('log-title');
+    this.logLines = $('log-lines');
+    this.logT = 0;
+    this._promptShown = null;
+
+    game.onPrompt = (text, locked) => this.setPrompt(text, locked);
+    game.onDown = () => this.banner('CHECKPOINT RELOADED');
+    game.campaign.onObjective = (stage, i, n) => this.setObjective(stage, i, n);
+    game.campaign.onLog = (entry) => this.showLog(entry);
+    game.campaign.onCheckpoint = () => this.banner('CHECKPOINT');
+    game.campaign.onComplete = () => this.banner('MISSION COMPLETE');
     this._v = new THREE.Vector3();
 
     // Each on-screen button drives one named action and nothing else.
@@ -124,6 +142,14 @@ export class HUD {
     this.bannerT = 2.4;
   }
 
+  // Short centre banner reused by the campaign for checkpoints and mission end.
+  banner(title, sub) {
+    const b = $('banner');
+    b.innerHTML = `<b>${title}</b>${sub ? `<span>${sub}</span>` : ''}`;
+    b.classList.add('show');
+    this.bannerT = 2.0;
+  }
+
   showCombo(mult) {
     const el = $('combo');
     if (mult <= 1) { el.classList.remove('show'); return; }
@@ -152,6 +178,12 @@ export class HUD {
   // ---------------- per-frame ----------------
 
   update(dt) {
+    // story log auto-dismiss
+    if (this.logT > 0) {
+      this.logT -= dt;
+      if (this.logT <= 0) this.logBox.classList.add('hidden');
+    }
+
     const g = this.game;
     const w = g.weapons;
 
@@ -288,6 +320,15 @@ export class HUD {
         </div>
 
         <div class="modes">
+          <button class="mode" data-a="play-campaign">
+            <b>CAMPAIGN — THE SIGNAL</b><span>Meridian Ridge Research Station. Find out what happened.</span>
+            <i>DIFFICULTY ${(this.difficulty || 'normal').toUpperCase()}</i>
+          </button>
+          <div class="row diffrow">
+            <button class="btn sm" data-a="diff-easy">Easy</button>
+            <button class="btn sm" data-a="diff-normal">Normal</button>
+            <button class="btn sm" data-a="diff-hard">Hard</button>
+          </div>
           <button class="mode" data-a="play-survival">
             <b>SURVIVAL</b><span>Endless waves. Wave 1 starts with five.</span>
             <i>BEST WAVE ${p.bestWave || '--'}</i>
@@ -463,6 +504,32 @@ export class HUD {
       </div>`);
   }
 
+  setObjective(stage, i, n) {
+    if (!stage) { this.objBox.classList.add('hidden'); return; }
+    this.objText.textContent = stage.text;
+    this.objHint.textContent = (stage.hint || '') + '   ' + (i + 1) + '/' + n;
+    this.objBox.classList.remove('hidden');
+  }
+
+  setPrompt(text, locked) {
+    if (text === this._promptShown) return;
+    this._promptShown = text;
+    if (!text) { this.promptBox.classList.add('hidden'); return; }
+    this.promptText.textContent = text;
+    this.promptBox.classList.toggle('locked', !!locked);
+    this.promptBox.classList.remove('hidden');
+  }
+
+  showLog(entry) {
+    if (!entry) return;
+    this.logTitle.textContent = entry.title || '';
+    this.logLines.innerHTML = (entry.lines || []).map((l) => '<div></div>').join('');
+    [...this.logLines.children].forEach((d, i) => { d.textContent = entry.lines[i]; });
+    this.logBox.classList.remove('hidden');
+    // Long enough to read, short enough not to stall the player.
+    this.logT = 3.2 + (entry.lines || []).length * 1.5;
+  }
+
   // ---------------- wiring ----------------
 
   wire(scope) {
@@ -475,6 +542,13 @@ export class HUD {
         const a = b.dataset.a;
         audio.sfx[a === 'back' || a === 'quit' ? 'uiBack' : 'ui']();
         switch (a) {
+          case 'play-campaign':
+            this.panel = 'main';
+            g.difficulty = this.difficulty || 'normal';
+            g.start(MODE.CAMPAIGN); audio.startAmbience(); break;
+          case 'diff-easy': this.difficulty = 'easy'; this.go('main'); break;
+          case 'diff-normal': this.difficulty = 'normal'; this.go('main'); break;
+          case 'diff-hard': this.difficulty = 'hard'; this.go('main'); break;
           case 'play-survival': this.panel = 'main'; g.start(MODE.SURVIVAL); audio.startAmbience(); break;
           case 'play-time': this.panel = 'main'; g.start(MODE.TIME); audio.startAmbience(); break;
           case 'loadout': this.go('loadout'); break;
