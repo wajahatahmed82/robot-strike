@@ -72,6 +72,17 @@ Basement only works because `Player.groundAt` takes list of `voids`: building in
     const c = await import('/tools/campaigntest.js'); c.run(__rs)   // 25 checks
     const w = await import('/tools/walktest.js');    w.run(__rs)    // route
 
+## AI states
+
+IDLE, PATROL, ALERT, CHASE, ATTACK, COVER, FLANK, SEARCH, RETREAT, DEAD.
+
+COVER: sustained fire raises `suppressT`; soldier samples 8 directions x 2 radii
+for a spot that breaks LOS to player, holds ~3s, leans back out. Sampled once on
+entry, not per frame -- each candidate costs a real LOS test.
+FLANK: lost contact 1.2-5s -> approach from ~60-110 deg off the last known
+position instead of down the same corridor.
+Kill alerts squad within 20m (soft), a non-lethal hit within 12m.
+
 ## Input
 
 Every action independent latched boolean in `src/input.js`, built from three OR'd sources (keyboard, mouse buttons, on-screen buttons). One-shot actions go through edge queue drained once per frame. Nothing in input ever cancels unrelated action.

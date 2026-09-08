@@ -16,6 +16,7 @@ import { createSoldier, poseSoldier, KIT, BONE } from './soldier.js';
 export const STATE = {
   IDLE: 'idle', PATROL: 'patrol', ALERT: 'alert', CHASE: 'chase',
   ATTACK: 'attack', SEARCH: 'search', RETREAT: 'retreat', DEAD: 'dead',
+  COVER: 'cover', FLANK: 'flank',
 };
 
 export { KIT };
@@ -66,6 +67,9 @@ export class Enemy {
     this.awareness = 0;
     this.reactT = 0;
     this.idleLook = Math.random() * Math.PI * 2;
+    this.coverPoint = null;
+    this.flankPoint = null;
+    this.suppressT = 0;
     this.diff = { accuracy: 1, reaction: 1, awareness: 1, damage: 1 };
     this.losPhase = (nextId * 7) % 3;
     this.losCache = false;
@@ -149,6 +153,7 @@ export class Enemy {
     this.hp -= amount;
     this.hitFlash = 1;
     this.hitT = 1;
+    this.suppressT = Math.min(2.5, this.suppressT + 1.1);
     this.hitSide = Math.random() < 0.5 ? -1 : 1;
     // Being shot always reveals the player, even from behind cover.
     this.alerted = true;
@@ -181,6 +186,7 @@ export class Enemy {
     let canSee;
     this.losAge += dt;
     this.reactT = Math.max(0, this.reactT - dt);
+    this.suppressT = Math.max(0, this.suppressT - dt * 0.7);
     if (dist > this.spec.sightRange) {
       canSee = false;
       this.losCache = false;
@@ -257,12 +263,26 @@ export class Enemy {
         break;
       case S2.CHASE:
         if (canSee && dist <= this.spec.attackRange) this._set(S2.ATTACK);
-        else if (!canSee && this.sawAt > 1.6) this._set(S2.SEARCH);
+        // Lost sight but still knows roughly where: come at it from the side
+        // rather than running down the same corridor into the same muzzle.
+        else if (!canSee && this.sawAt > 1.2 && this.sawAt < 5) this._set(S2.FLANK);
+        else if (!canSee && this.sawAt >= 5) this._set(S2.SEARCH);
         else if (smart && hurtBadly) this._set(S2.RETREAT);
         break;
       case S2.ATTACK:
-        if (!canSee || dist > this.spec.attackRange * 1.15) this._set(S2.CHASE);
+        // Being shot at is a reason to break contact and use the building.
+        if (this.suppressT > 0.6 && this.stateT > 0.8) this._set(S2.COVER);
+        else if (!canSee || dist > this.spec.attackRange * 1.15) this._set(S2.CHASE);
         else if (smart && hurtBadly && this.stateT > 1.2) this._set(S2.RETREAT);
+        break;
+      case S2.COVER:
+        // Hold cover briefly, then lean back out. A soldier who never comes
+        // back out is just a soldier who left the fight.
+        if (this.stateT > 2.2 + Math.random() * 1.5) { this.coverPoint = null; this._set(S2.ATTACK); }
+        break;
+      case S2.FLANK:
+        if (canSee && dist <= this.spec.attackRange) { this.flankPoint = null; this._set(S2.ATTACK); }
+        else if (this.stateT > 6) { this.flankPoint = null; this._set(S2.SEARCH); }
         break;
       case S2.SEARCH:
         if (this.alerted && canSee) this._set(S2.ALERT);
@@ -272,6 +292,46 @@ export class Enemy {
         if (this.stateT > 2.6 || this.hp / this.maxHp > 0.55) this._set(S2.CHASE);
         break;
     }
+  }
+
+  // Look for a spot nearby that breaks line of sight to the player. Sampled
+  // once on entering cover, not per frame: each candidate costs a real LOS
+  // test and there are eight of them.
+  _findCover(ctx, dist) {
+    const pos = this.root.position;
+    const p = ctx.player;
+    const eyeY = pos.y + 1.55;
+    let best = null, bestScore = -Infinity;
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      for (const r of [2.6, 4.5]) {
+        const x = pos.x + Math.sin(a) * r, z = pos.z + Math.cos(a) * r;
+        if (ctx.blocked(x, z)) continue;
+        const hidden = !ctx.canSee({ x, y: eyeY, z }, p);
+        if (!hidden) continue;
+        // Prefer close cover that does not walk toward the player.
+        const away = Math.hypot(x - p.x, z - p.z) - dist;
+        const score = away * 0.6 - r * 0.3;
+        if (score > bestScore) { bestScore = score; best = { x, z }; }
+      }
+    }
+    return best;
+  }
+
+  // A point off to one side of the player's last known position, so the
+  // approach comes from an angle the player is not already covering.
+  _findFlank(ctx) {
+    const pos = this.root.position;
+    const t = this.lastSeen;
+    const ang = Math.atan2(pos.x - t.x, pos.z - t.z);
+    const side = this.strafeDir;
+    for (const off of [1.1, 1.5, 0.75, 1.9]) {
+      const a = ang + side * off;
+      const r = 6 + Math.random() * 4;
+      const x = t.x + Math.sin(a) * r, z = t.z + Math.cos(a) * r;
+      if (!ctx.blocked(x, z)) return { x, z };
+    }
+    return null;
   }
 
   _set(s) { this.state = s; this.stateT = 0; }
@@ -357,6 +417,28 @@ export class Enemy {
     } else if (this.state === S2.CHASE) {
       wantX = dx; wantZ = dz; moving = true;
       face(dx, dz, 4.0);
+    } else if (this.state === S2.COVER) {
+      if (!this.coverPoint) this.coverPoint = this._findCover(ctx, dist);
+      if (this.coverPoint) {
+        wantX = this.coverPoint.x - pos.x;
+        wantZ = this.coverPoint.z - pos.z;
+        moving = Math.hypot(wantX, wantZ) > 0.9;
+        face(dx, dz, 3.0);          // keep eyes on the threat while relocating
+      } else {
+        face(dx, dz, 4.0);
+      }
+      this._shoot(dt, ctx, dist, canSee && !moving);
+    } else if (this.state === S2.FLANK) {
+      if (!this.flankPoint) this.flankPoint = this._findFlank(ctx);
+      if (this.flankPoint) {
+        wantX = this.flankPoint.x - pos.x;
+        wantZ = this.flankPoint.z - pos.z;
+        if (Math.hypot(wantX, wantZ) < 1.5) this.flankPoint = null;
+        moving = true;
+        face(wantX, wantZ, 3.2);
+      } else {
+        wantX = dx; wantZ = dz; moving = true; face(dx, dz, 3.0);
+      }
     } else if (this.state === S2.SEARCH) {
       wantX = this.lastSeen.x - pos.x;
       wantZ = this.lastSeen.z - pos.z;

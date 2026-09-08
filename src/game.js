@@ -306,6 +306,12 @@ export class Game {
           anyKill = true;
           if (res.headshot) anyHead = true;
           this.registerKill(robot, res.headshot, hit.point.clone());
+          // A man going down is loud. Nearby soldiers come to look; the ones
+          // closest treat it as contact rather than a noise.
+          this.alertNear(robot.root.position, 20, false);
+        } else {
+          // Being shot at and missed still gives away roughly where you are.
+          this.alertNear(robot.root.position, 12, false);
         }
       } else {
         const n = hit.face ? hit.face.normal.clone() : new THREE.Vector3(0, 1, 0);
