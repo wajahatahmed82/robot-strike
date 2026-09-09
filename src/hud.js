@@ -311,7 +311,7 @@ export class HUD {
     return this.el(`
       <div class="panel wide fade">
         <div class="brand"><span>ROBOT</span><b>STRIKE</b></div>
-        <div class="tagline">Reclamation Yard 7 &middot; hostile machines inbound</div>
+        <div class="tagline">Meridian Ridge Research Station &middot; something happened here</div>
 
         <div class="lvlbar">
           <div class="lvlrow"><span>LEVEL ${p.level}</span><span>${p.xpIntoLevel} / ${p.xpNeeded} XP</span></div>
