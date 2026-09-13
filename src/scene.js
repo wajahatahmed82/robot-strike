@@ -39,16 +39,21 @@ export function buildScene(renderer) {
   pmrem.compileEquirectangularShader();
   scene.environment = pmrem.fromEquirectangular(sky).texture;
   pmrem.dispose();
-  scene.environmentIntensity = 0.95;
-  scene.fog = new THREE.FogExp2(PAL.fog, 0.0075);
+  // The environment map is the only light that reaches interiors without a
+  // shadow test, so it carries the indoor fill. It must be neutral: a blue sky
+  // here is what made every wall in the building read cold.
+  scene.environmentIntensity = 1.15;
+  scene.fog = new THREE.FogExp2(PAL.fog, 0.0062);
 
   // ---------------- light ----------------
   // Hemisphere fill lands in indirect diffuse, which the Lambert BRDF divides
   // by PI. It has to be large or every surface facing away from the key light
   // crushes to black.
-  scene.add(new THREE.HemisphereLight(PAL.ambientSky, PAL.ambientGround, 5.0));
+  // Was 5.0 with a blue sky colour, which flooded the whole level with cold
+  // fill. Lower and neutral now; the environment map makes up the difference.
+  scene.add(new THREE.HemisphereLight(PAL.ambientSky, PAL.ambientGround, 2.6));
 
-  const sun = new THREE.DirectionalLight(PAL.sun, 3.0);
+  const sun = new THREE.DirectionalLight(PAL.sun, 3.4);
   sun.position.set(-34, 34, 26);
   sun.castShadow = true;
   sun.shadow.mapSize.set(1024, 1024);
@@ -62,7 +67,13 @@ export function buildScene(renderer) {
   scene.add(sun, sun.target);
 
   // ---------------- ground ----------------
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(500, 500), mats.concreteFloor);
+  // Asphalt, tiled in metres rather than stretched once across 500m, which is
+  // what made the ground read as a flat colour field.
+  const groundGeo = new THREE.PlaneGeometry(500, 500);
+  const guv = groundGeo.attributes.uv;
+  for (let i = 0; i < guv.count; i++) guv.setXY(i, guv.getX(i) * 71, guv.getY(i) * 71);
+  guv.needsUpdate = true;
+  const ground = new THREE.Mesh(groundGeo, mats.asphalt);
   ground.rotation.x = -Math.PI / 2;
   ground.receiveShadow = true;
   scene.add(ground);

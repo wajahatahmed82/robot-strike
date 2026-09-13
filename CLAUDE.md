@@ -42,6 +42,11 @@ Live: https://wajahatahmed82.github.io/robot-strike/
 - **Level that screenshots well can still be unwalkable.** `tools/walktest.js` drives real player controller along campaign route. Found three faults no still would show: leftover `arenaRadius: 54` leash cutting across stair shaft, stair treads centred so first step down was step up, and basement sealed off because staircase descends south while only door was north -- player would've had to walk back under the flight.
 - **Reachability test must check height, not just X/Z.** Standing on ground floor directly above basement satisfied 2D distance check, sealed staircase passed.
 - **Enemy sight ranges tuned for open arena.** 70-110m indoors means shot from across building moment you step into corridor. Campaign values 26-60m with vision cone.
+- **Blue-looking world had three causes, not one.** Albedo palettes were blue-grey ([76,80,86]), the sky doubled as `scene.environment` so every PBR surface picked up its tint, and the HemisphereLight ran at 5.0 with a blue sky colour. Measured wall pixels had blue exceeding red by 41-46. All three had to change; recolouring walls alone would have done nothing.
+- **A hemisphere light paints down-facing normals with its GROUND colour.** A warm-brown `ambientGround` turned every ceiling in the building brown.
+- **`BoxGeometry` UVs are 0..1 per face whatever the box size.** One texture stretched across a 20m wall and squeezed onto a 2m one, which is most of why walls read as repeated identical panels. `scaleBoxUV` in facility.js rewrites UVs in metres; `TILE` holds metres-per-repeat per material.
+- **Openings must sit proud of the wall face, not on its centre line.** Shell walls are 0.3 thick, so a window at the wall's z was buried inside the masonry and invisible.
+- **Brick needs real dimensions.** 4 bricks per 1.35m is 337mm long and 150mm tall; it reads as a toy wall. 215x65mm with a 10mm joint means 4 per 0.9m over 12 courses.
 - **String `.replace()` in build must use function.** `$&` in replacement string means "insert the match", minified JS contains `$&`.
 
 ## Verifying changes

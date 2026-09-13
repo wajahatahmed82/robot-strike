@@ -30,9 +30,34 @@ export function buildFacility(scene, mats, PAL) {
   const voids = [];
   const areas = {};
   const anchors = {};
-  const buckets = { steel: [], panel: [], rust: [], crate: [], floor: [], ceil: [] };
+  const buckets = { steel: [], panel: [], rust: [], crate: [], floor: [], ceil: [],
+                    brick: [], painted: [], plaster: [], asphalt: [], paintMetal: [], glass: [],
+                    gunMetalBucket: [] };
   const glow = { warm: [], cold: [], hazard: [] };
   const lights = [];
+
+  // A BoxGeometry face is UV 0..1 whatever its size, so one texture is stretched
+  // across a 20m wall and squeezed onto a 2m one. That is most of why the walls
+  // read as repeated identical panels. Rewriting the UVs in metres makes brick
+  // courses and concrete grain the same size everywhere.
+  const scaleBoxUV = (geo, w, h, d, tile) => {
+    const uv = geo.attributes.uv;
+    if (!uv) return geo;
+    const spans = [
+      [d, h], [d, h],    // +X, -X
+      [w, d], [w, d],    // +Y, -Y
+      [w, h], [w, h],    // +Z, -Z
+    ];
+    for (let f = 0; f < 6; f++) {
+      const su = spans[f][0] / tile, sv = spans[f][1] / tile;
+      for (let k = 0; k < 4; k++) {
+        const i = f * 4 + k;
+        uv.setXY(i, uv.getX(i) * su, uv.getY(i) * sv);
+      }
+    }
+    uv.needsUpdate = true;
+    return geo;
+  };
 
   const OBJ = new THREE.Object3D();
   const put = (geo, x, y, z, ry = 0) => {
@@ -48,9 +73,18 @@ export function buildFacility(scene, mats, PAL) {
                      minZ: z - d / 2, maxZ: z + d / 2, top, bottom });
   };
 
+  // Metres covered by one texture repeat, per material. Brick courses have to
+  // come out about 215mm long or it reads as a toy wall.
+  const TILE = {
+    brick: 0.90, painted: 2.6, plaster: 2.8, floor: 4.0, asphalt: 7.0,
+    ceil: 2.4, steel: 2.0, panel: 2.4, rust: 1.6, crate: 1.1,
+    paintMetal: 1.8, glass: 1.6, gunMetalBucket: 0.8,
+  };
+
   // A box of geometry, optionally collidable.
   const box = (bucket, w, h, d, x, y, z, blocks = true) => {
-    buckets[bucket].push(put(new THREE.BoxGeometry(w, h, d), x, y, z));
+    const geo = scaleBoxUV(new THREE.BoxGeometry(w, h, d), w, h, d, TILE[bucket] || 2.0);
+    buckets[bucket].push(put(geo, x, y, z));
     if (blocks) solid(w, d, x, z, y + h / 2, y - h / 2);
   };
 
@@ -70,7 +104,8 @@ export function buildFacility(scene, mats, PAL) {
   const slab = (x1, z1, x2, z2, y) => {
     const w = x2 - x1, d = z2 - z1;
     if (w <= 0 || d <= 0) return;
-    buckets.floor.push(put(new THREE.BoxGeometry(w, 0.4, d), (x1 + x2) / 2, y - 0.2, (z1 + z2) / 2));
+    buckets.floor.push(put(scaleBoxUV(new THREE.BoxGeometry(w, 0.4, d), w, 0.4, d, TILE.floor),
+      (x1 + x2) / 2, y - 0.2, (z1 + z2) / 2));
     solid(w, d, (x1 + x2) / 2, (z1 + z2) / 2, y, y - 0.4);
   };
   // four strips around the shaft
@@ -93,7 +128,7 @@ export function buildFacility(scene, mats, PAL) {
 
   // A wall run along one axis with doorway gaps cut out of it.
   // `gaps` are [centre, width] along the run.
-  const wall = (x1, z1, x2, z2, h, gaps = [], y0 = 0, bucket = 'panel') => {
+  const wall = (x1, z1, x2, z2, h, gaps = [], y0 = 0, bucket = 'plaster') => {
     const horiz = Math.abs(x2 - x1) > Math.abs(z2 - z1);
     const a = horiz ? x1 : z1;
     const b = horiz ? x2 : z2;
@@ -127,7 +162,8 @@ export function buildFacility(scene, mats, PAL) {
     const w = x2 - x1, d = z2 - z1;
     // Concrete, not the ribbed panel: the panel's ribs smear into long streaks
     // when stretched over a span this size.
-    buckets.ceil.push(put(new THREE.BoxGeometry(w, CEIL_T, d), (x1 + x2) / 2, y, (z1 + z2) / 2));
+    buckets.ceil.push(put(scaleBoxUV(new THREE.BoxGeometry(w, CEIL_T, d), w, CEIL_T, d, TILE.ceil),
+      (x1 + x2) / 2, y, (z1 + z2) / 2));
     solid(w, d, (x1 + x2) / 2, (z1 + z2) / 2, y + CEIL_T / 2, y - CEIL_T / 2);
   };
 
@@ -145,13 +181,43 @@ export function buildFacility(scene, mats, PAL) {
   area('gate', -8, 8, 8, 15);
   area('forecourt', -20, 0, 20, 8);
 
-  // perimeter fence with the gate standing open
-  for (const [x1, z1, x2, z2, gaps] of [
-    [-34, 42, 34, 42, []],
-    [-34, 42, -34, -2, []],
-    [34, 42, 34, -2, []],
-    [-34, 14.5, 34, 14.5, [[0, 9]]],
-  ]) wall(x1, z1, x2, z2, 2.6, gaps, 0, 'steel');
+  // Perimeter fence: posts, rails and mesh infill. Built as a solid wall run it
+  // read as a stone boundary wall and hid the whole building on approach.
+  const fenceRun = (x1, z1, x2, z2, gaps) => {
+    const horiz = Math.abs(x2 - x1) > Math.abs(z2 - z1);
+    const a = horiz ? x1 : z1, b = horiz ? x2 : z2;
+    const fixed = horiz ? z1 : x1;
+    const lo = Math.min(a, b), hi = Math.max(a, b);
+    const H = 2.4, BAY = 2.6;
+    const inGap = (t) => (gaps || []).some((g) => Math.abs(t - g[0]) < g[1] / 2);
+    for (let t = lo; t < hi; t += BAY) {
+      const seg = Math.min(BAY, hi - t);
+      const mid = t + seg / 2;
+      if (inGap(mid)) continue;
+      // post
+      if (horiz) box('paintMetal', 0.12, H, 0.12, t, H / 2, fixed);
+      else box('paintMetal', 0.12, H, 0.12, fixed, H / 2, t);
+      // mesh infill plus top and bottom rails
+      if (horiz) {
+        box('steel', seg - 0.14, H - 0.35, 0.03, mid, H / 2, fixed, false);
+        box('paintMetal', seg, 0.07, 0.07, mid, H - 0.1, fixed, false);
+        box('paintMetal', seg, 0.07, 0.07, mid, 0.22, fixed, false);
+        solid(seg, 0.2, mid, fixed, H, 0);
+      } else {
+        box('steel', 0.03, H - 0.35, seg - 0.14, fixed, H / 2, mid, false);
+        box('paintMetal', 0.07, 0.07, seg, fixed, H - 0.1, mid, false);
+        box('paintMetal', 0.07, 0.07, seg, fixed, 0.22, mid, false);
+        solid(0.2, seg, fixed, mid, H, 0);
+      }
+    }
+    // end post
+    if (horiz) box('paintMetal', 0.12, H, 0.12, hi, H / 2, fixed);
+    else box('paintMetal', 0.12, H, 0.12, fixed, H / 2, hi);
+  };
+  fenceRun(-34, 42, 34, 42, []);
+  fenceRun(-34, 42, -34, -2, []);
+  fenceRun(34, 42, 34, -2, []);
+  fenceRun(-34, 14.5, 34, 14.5, [[0, 9]]);
 
   // gate posts and the swung-open leaves
   box('steel', 0.4, 3.2, 0.4, -4.6, 1.6, 14.5);
@@ -161,24 +227,32 @@ export function buildFacility(scene, mats, PAL) {
   lamp('hazard', 0.5, 0.12, 0.12, -4.6, 3.3, 14.5);
 
   // guard hut at the gate
-  wall(6, 12, 12, 12, 2.8, [], 0, 'panel');
-  wall(6, 18, 12, 18, 2.8, [[9, 1.2]], 0, 'panel');
-  wall(6, 12, 6, 18, 2.8, [[15, 1.2]], 0, 'panel');
-  wall(12, 12, 12, 18, 2.8, [], 0, 'panel');
+  wall(6, 12, 12, 12, 2.8, [], 0, 'painted');
+  wall(6, 18, 12, 18, 2.8, [[9, 1.2]], 0, 'painted');
+  wall(6, 12, 6, 18, 2.8, [[15, 1.2]], 0, 'painted');
+  wall(12, 12, 12, 18, 2.8, [], 0, 'painted');
   ceiling(6, 12, 12, 18, 2.9);
   lamp('warm', 1.0, 0.08, 0.2, 9, 2.6, 15);
 
   // parked vehicles: a slab body, cab and wheels each
-  const vehicle = (x, z, ry, len = 4.6) => {
+  // A saturated rust box reads as a bright orange slab, not a vehicle. Painted
+  // bodywork, glazing, a dark sill line and rubber for the wheels.
+  const vehicle = (x, z, ry, len) => {
+    const L = len || 4.6;
     const c = Math.cos(ry), s = Math.sin(ry);
     const at = (dx, dz) => [x + dx * c - dz * s, z + dx * s + dz * c];
     const [bx, bz] = at(0, 0);
-    box('rust', 2.1, 1.0, len, bx, 0.95, bz);
-    const [cx2, cz2] = at(0, -len * 0.22);
-    box('steel', 1.9, 0.85, len * 0.34, cx2, 1.85, cz2, false);
-    for (const [dx, dz] of [[-0.95, len * 0.32], [0.95, len * 0.32], [-0.95, -len * 0.32], [0.95, -len * 0.32]]) {
-      const [wx, wz] = at(dx, dz);
-      box('steel', 0.34, 0.7, 0.7, wx, 0.35, wz, false);
+    box('paintMetal', 2.05, 0.72, L, bx, 0.98, bz);
+    box('paintMetal', 2.12, 0.16, L * 0.99, bx, 0.60, bz, false);   // sill
+    const [cx2, cz2] = at(0, -L * 0.20);
+    box('paintMetal', 1.88, 0.30, L * 0.34, cx2, 1.52, cz2, false); // cab shoulder
+    const [gx, gz] = at(0, -L * 0.20);
+    buckets.glass.push(put(scaleBoxUV(new THREE.BoxGeometry(1.78, 0.52, L * 0.33),
+      1.78, 0.52, L * 0.33, TILE.glass), gx, 1.86, gz));
+    box('paintMetal', 1.92, 0.12, L * 0.36, cx2, 2.14, cz2, false); // roof
+    for (const w of [[-0.98, L * 0.32], [0.98, L * 0.32], [-0.98, -L * 0.32], [0.98, -L * 0.32]]) {
+      const [wx, wz] = at(w[0], w[1]);
+      box('gunMetalBucket', 0.30, 0.74, 0.74, wx, 0.37, wz, false);
     }
   };
   vehicle(-18, 24, 0.1); vehicle(-12, 24, 0.0); vehicle(12, 26, 0.05, 6.2);
@@ -210,10 +284,10 @@ export function buildFacility(scene, mats, PAL) {
   area('loading', 2, -61, 30, -50);
 
   // outer shell
-  wall(-31, -0.5, 31, -0.5, G, [[0, 3.2]]);                 // front, main entrance
-  wall(-31, -61, 31, -61, G, [[18, 7]]);                    // rear, loading door
-  wall(-31, -0.5, -31, -61, G, []);
-  wall(31, -0.5, 31, -61, G, []);
+  wall(-31, -0.5, 31, -0.5, G, [[0, 3.2]], 0, 'brick');     // front, main entrance
+  wall(-31, -61, 31, -61, G, [[18, 7]], 0, 'painted');      // rear, loading door
+  wall(-31, -0.5, -31, -61, G, [], 0, 'brick');
+  wall(31, -0.5, 31, -61, G, [], 0, 'painted');
   ceiling(-31, -61, 31, -0.5, G);
 
   // reception / checkpoint / offices
@@ -272,19 +346,19 @@ export function buildFacility(scene, mats, PAL) {
   area('armory', 8, -44, 24, -28, BASE_Y);
 
   const BH = 3.2;
-  wall(-6, -47, -6, -24, BH, [[-36, 1.8]], BASE_Y);
-  wall(6, -47, 6, -24, BH, [[-34, 1.8]], BASE_Y);
-  wall(-6, -24, 6, -24, BH, [], BASE_Y);
-  wall(-6, -47, 6, -47, BH, [[0, 3.0]], BASE_Y);
+  wall(-6, -47, -6, -24, BH, [[-36, 1.8]], BASE_Y, 'painted');
+  wall(6, -47, 6, -24, BH, [[-34, 1.8]], BASE_Y, 'painted');
+  wall(-6, -24, 6, -24, BH, [], BASE_Y, 'painted');
+  wall(-6, -47, 6, -47, BH, [[0, 3.0]], BASE_Y, 'painted');
   ceiling(-28, -47, 26, -23, BASE_Y + BH);
 
-  wall(-26, -46, -26, -26, BH, [], BASE_Y);
-  wall(-26, -26, -6, -26, BH, [], BASE_Y);
-  wall(-26, -46, -6, -46, BH, [], BASE_Y);
-  wall(8, -44, 8, -28, BH, [[-34, 1.8]], BASE_Y);
-  wall(24, -44, 24, -28, BH, [], BASE_Y);
-  wall(8, -28, 24, -28, BH, [], BASE_Y);
-  wall(8, -44, 24, -44, BH, [], BASE_Y);
+  wall(-26, -46, -26, -26, BH, [], BASE_Y, 'painted');
+  wall(-26, -26, -6, -26, BH, [], BASE_Y, 'painted');
+  wall(-26, -46, -6, -46, BH, [], BASE_Y, 'painted');
+  wall(8, -44, 8, -28, BH, [[-34, 1.8]], BASE_Y, 'painted');
+  wall(24, -44, 24, -28, BH, [], BASE_Y, 'painted');
+  wall(8, -28, 24, -28, BH, [], BASE_Y, 'painted');
+  wall(8, -44, 24, -44, BH, [], BASE_Y, 'painted');
 
   // ---------------------------------------------------------------- props
 
@@ -451,6 +525,182 @@ export function buildFacility(scene, mats, PAL) {
   strip(16, -36, BASE_Y + BH - 0.3, 2.6);
   anchors.armoryCache = new THREE.Vector3(12, BASE_Y + 0.9, -31);
 
+  // ------------------------------------------------- exterior architecture
+  //
+  // A brick plane with nothing on it reads as a texture swatch, not a building.
+  // Everything below is what makes an elevation look built: openings with real
+  // reveals and frames, a roof edge, rainwater goods, plant and signage.
+
+  // A window: recessed reveal, dark glass, frame, mullion and a projecting
+  // cill. Not a hole -- the rooms behind are separate -- but built in layers so
+  // it reads as joinery rather than a painted-on rectangle.
+  const windowUnit = (x, y, z, w, h, axis, face) => {
+    const n = axis === 'z' ? [0, face] : [face, 0];
+    const ox = n[0] * 0.16, oz = n[1] * 0.16;
+    const dim = (bw, bh, bd) => (axis === 'z' ? [bw, bh, bd] : [bd, bh, bw]);
+
+    let d0 = dim(w, h, 0.06);
+    box('paintMetal', d0[0], d0[1], d0[2], x - ox * 0.2, y, z - oz * 0.2, false);
+
+    d0 = dim(w - 0.12, h - 0.12, 0.04);
+    buckets.glass.push(put(scaleBoxUV(new THREE.BoxGeometry(d0[0], d0[1], d0[2]),
+      d0[0], d0[1], d0[2], TILE.glass), x - ox * 0.1, y, z - oz * 0.1));
+
+    d0 = dim(w, 0.09, 0.10);
+    box('steel', d0[0], d0[1], d0[2], x + ox, y + h / 2, z + oz, false);
+    box('steel', d0[0], d0[1], d0[2], x + ox, y - h / 2, z + oz, false);
+    d0 = dim(0.09, h, 0.10);
+    const jx = axis === 'z' ? w / 2 : 0;
+    const jz = axis === 'z' ? 0 : w / 2;
+    box('steel', d0[0], d0[1], d0[2], x + ox - jx, y, z + oz - jz, false);
+    box('steel', d0[0], d0[1], d0[2], x + ox + jx, y, z + oz + jz, false);
+    box('steel', d0[0], d0[1], d0[2], x + ox, y, z + oz, false);
+
+    d0 = dim(w + 0.2, 0.10, 0.26);
+    box('painted', d0[0], d0[1], d0[2], x + n[0] * 0.06, y - h / 2 - 0.09, z + n[1] * 0.06, false);
+  };
+
+  // Roof edge: coping plus a gutter, which is what stops a building looking
+  // like an extruded rectangle.
+  const roofEdge = (x1, z1, x2, z2, y) => {
+    const horiz = Math.abs(x2 - x1) > Math.abs(z2 - z1);
+    const len = Math.hypot(x2 - x1, z2 - z1);
+    const cx = (x1 + x2) / 2, cz = (z1 + z2) / 2;
+    if (horiz) {
+      box('painted', len, 0.34, 0.62, cx, y + 0.17, cz, false);
+      box('paintMetal', len, 0.16, 0.20, cx, y - 0.12, cz + (z1 > -30 ? 0.34 : -0.34), false);
+    } else {
+      box('painted', 0.62, 0.34, len, cx, y + 0.17, cz, false);
+      box('paintMetal', 0.20, 0.16, len, cx + (x1 > 0 ? 0.34 : -0.34), y - 0.12, cz, false);
+    }
+  };
+
+  const downpipe = (x, z, yTop, yBot) => {
+    const h = yTop - yBot;
+    box('paintMetal', 0.16, h, 0.16, x, yBot + h / 2, z, false);
+    box('paintMetal', 0.24, 0.08, 0.24, x, yBot + 0.25, z, false);
+    box('paintMetal', 0.24, 0.08, 0.24, x, yTop - 0.4, z, false);
+  };
+
+  const acUnit = (x, y, z, w) => {
+    const ww = w || 1.3;
+    box('steel', ww, 0.85, 0.75, x, y, z, false);
+    for (let i = 0; i < 5; i++) {
+      box('paintMetal', ww - 0.18, 0.06, 0.04, x, y - 0.3 + i * 0.15, z + 0.39, false);
+    }
+    box('rust', 0.5, 0.12, 0.5, x, y - 0.48, z, false);
+  };
+
+  const louvre = (x, y, z, w, h, axis) => {
+    const d = axis === 'z' ? [w, h, 0.1] : [0.1, h, w];
+    box('paintMetal', d[0], d[1], d[2], x, y, z, false);
+    const n = Math.max(2, Math.round(h / 0.12));
+    for (let i = 0; i < n; i++) {
+      const yy = y - h / 2 + 0.06 + i * (h / n);
+      const sdim = axis === 'z' ? [w - 0.08, 0.04, 0.14] : [0.14, 0.04, w - 0.08];
+      box('steel', sdim[0], sdim[1], sdim[2], x, yy, z, false);
+    }
+  };
+
+  const cctv = (x, y, z, ry) => {
+    const c = Math.cos(ry), sn = Math.sin(ry);
+    box('painted', 0.1, 0.1, 0.34, x + sn * 0.17, y, z + c * 0.17, false);
+    box('steel', 0.22, 0.16, 0.42, x + sn * 0.42, y - 0.06, z + c * 0.42, false);
+    box('rust', 0.12, 0.12, 0.1, x + sn * 0.62, y - 0.06, z + c * 0.62, false);
+  };
+
+  const bollard = (x, z) => {
+    box('paintMetal', 0.16, 1.0, 0.16, x, 0.5, z);
+    box('painted', 0.2, 0.1, 0.2, x, 1.02, z, false);
+  };
+
+  const bin = (x, z) => {
+    box('paintMetal', 0.74, 1.05, 0.62, x, 0.52, z);
+    box('steel', 0.8, 0.08, 0.68, x, 1.08, z, false);
+  };
+
+  const palletStack = (x, z, n) => {
+    for (let i = 0; i < (n || 3); i++) box('rust', 1.2, 0.14, 1.0, x, 0.07 + i * 0.15, z, i === 0);
+  };
+
+  const barrier = (x, z, ry) => {
+    const w = ry ? 0.3 : 2.2, d = ry ? 2.2 : 0.3;
+    box('paintMetal', w, 1.05, d, x, 0.52, z);
+    box('painted', w, 0.16, d + 0.02, x, 0.86, z, false);
+  };
+
+  const signPlate = (x, y, z, w, h, axis) => {
+    const d = axis === 'z' ? [w, h, 0.05] : [0.05, h, w];
+    box('painted', d[0], d[1], d[2], x, y, z, false);
+    const f = axis === 'z' ? [w + 0.06, h + 0.06, 0.03] : [0.03, h + 0.06, w + 0.06];
+    box('steel', f[0], f[1], f[2], x, y, z, false);
+  };
+
+  const kerb = (x1, z1, x2, z2) => {
+    const horiz = Math.abs(x2 - x1) > Math.abs(z2 - z1);
+    const len = Math.hypot(x2 - x1, z2 - z1);
+    const cx = (x1 + x2) / 2, cz = (z1 + z2) / 2;
+    if (horiz) box('painted', len, 0.14, 0.32, cx, 0.07, cz, false);
+    else box('painted', 0.32, 0.14, len, cx, 0.07, cz, false);
+  };
+  const paintLine = (x, z, w, d) => box('painted', w, 0.02, d, x, 0.015, z, false);
+  const manhole = (x, z) => {
+    box('rust', 0.78, 0.04, 0.78, x, 0.022, z, false);
+    box('steel', 0.62, 0.05, 0.62, x, 0.028, z, false);
+  };
+
+  // ---- front elevation ----
+  for (const wx of [-28, -24, -20, -16, -12, 12, 16, 20, 24, 28]) windowUnit(wx, 2.5, -0.30, 2.0, 1.5, 'z', 1);
+  box('painted', 4.6, 0.45, 0.5, 0, 3.35, -0.30, false);
+  box('steel', 4.2, 0.12, 1.5, 0, 3.1, 0.35, false);
+  box('steel', 0.12, 3.0, 0.12, -1.9, 1.5, 1.0);
+  box('steel', 0.12, 3.0, 0.12, 1.9, 1.5, 1.0);
+  signPlate(0, 3.9, -0.26, 5.2, 0.7, 'z');
+  cctv(-3.2, 3.6, -0.3, Math.PI);
+  cctv(3.2, 3.6, -0.3, Math.PI);
+
+  // ---- side and rear elevations ----
+  for (const wz of [-6, -12, -18, -24, -30, -36, -42, -48, -54]) {
+    windowUnit(-31.22, 2.6, wz, 1.6, 1.4, 'x', -1);
+    windowUnit(31.22, 2.6, wz, 1.6, 1.4, 'x', 1);
+  }
+  roofEdge(-31, -0.5, 31, -0.5, G);
+  roofEdge(-31, -61, 31, -61, G);
+  roofEdge(-31, -0.5, -31, -61, G);
+  roofEdge(31, -0.5, 31, -61, G);
+  for (const dp of [[-31.3, -12], [-31.3, -40], [31.3, -12], [31.3, -40], [-12, -0.22], [12, -0.22]]) {
+    downpipe(dp[0], dp[1], G - 0.3, 0);
+  }
+  acUnit(30.0, 2.6, -20); acUnit(30.0, 2.6, -26); acUnit(30.0, 2.6, -32, 1.6);
+  louvre(-31.22, 2.2, -30, 1.8, 1.2, 'x');
+  louvre(31.22, 2.2, -46, 2.2, 1.4, 'x');
+  louvre(0, 2.4, -61.22, 2.4, 1.2, 'z');
+  cctv(-31.3, 3.3, -30, Math.PI / 2);
+  cctv(22, 3.3, -60.5, 0);
+
+  // ---- the yard ----
+  kerb(-28, 13.6, 28, 13.6);
+  kerb(-28, 1.2, -10, 1.2);
+  kerb(10, 1.2, 28, 1.2);
+  for (let i = 0; i < 9; i++) paintLine(-24 + i * 6, 24, 0.12, 5.0);
+  for (let i = 0; i < 9; i++) paintLine(-24 + i * 6, 34, 0.12, 5.0);
+  paintLine(0, 21.4, 52, 0.14);
+  paintLine(0, 36.6, 52, 0.14);
+  for (let i = 0; i < 14; i++) paintLine(-26 + i * 4, 9, 1.8, 0.16);
+  manhole(-8, 10); manhole(14, 6); manhole(-20, 30);
+  for (const bx of [-7.4, -5.2, 5.2, 7.4]) bollard(bx, 2.6);
+  bin(-13, 2.4); bin(-11.6, 2.4);
+  palletStack(22, 4, 4); palletStack(23.4, 5.2, 2);
+  barrier(-16, 12); barrier(16, 12);
+  signPlate(-4.6, 2.4, 14.2, 1.3, 0.9, 'z');
+  signPlate(9, 2.1, 11.9, 1.1, 0.8, 'z');
+
+  // ---- loading yard behind ----
+  kerb(4, -62.4, 30, -62.4);
+  palletStack(26, -59, 3); palletStack(27.4, -60.2, 2);
+  bin(6, -62); barrier(12, -62.6);
+  signPlate(18, 3.2, -61.26, 2.6, 0.6, 'z');
+
   // scattered debris through the whole building
   const rnd = (() => { let s = 4242; return () => (s = (s * 1664525 + 1013904223) >>> 0) / 4294967296; })();
   for (let i = 0; i < 90; i++) {
@@ -470,8 +720,15 @@ export function buildFacility(scene, mats, PAL) {
     scene.add(m); statics.push(m);
   };
   addMerged(buckets.floor, mats.concreteFloor);
-  addMerged(buckets.ceil, mats.concreteFloor);
+  addMerged(buckets.asphalt, mats.asphalt);
+  addMerged(buckets.ceil, mats.ceilingTile);
+  addMerged(buckets.brick, mats.brick);
+  addMerged(buckets.painted, mats.painted);
+  addMerged(buckets.plaster, mats.plaster);
   addMerged(buckets.panel, mats.panel);
+  addMerged(buckets.paintMetal, mats.paintMetal);
+  addMerged(buckets.glass, mats.glass);
+  addMerged(buckets.gunMetalBucket, mats.gunMetal);
   addMerged(buckets.steel, mats.steel);
   addMerged(buckets.rust, mats.rust);
   addMerged(buckets.crate, mats.crate);

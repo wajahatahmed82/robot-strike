@@ -157,13 +157,17 @@ export const DIFFICULTY = {
 };
 
 export const PAL = {
-  skyTop: 0x1c2a38,
-  skyMid: 0x44586a,
-  skyLow: 0x76889a,
-  sun: 0xdce9f5,
-  ambientSky: 0x9cb8d0,
-  ambientGround: 0x4e4740,
-  fog: 0x46545f,
-  workLight: 0xffb257,
+  // Overcast late afternoon, not moonlight. Every value here was blue-heavy,
+  // and because the sky doubles as the environment map it tinted every PBR
+  // surface in the game before the albedo got a say.
+  skyTop: 0x39434c,
+  skyMid: 0x6d7176,
+  skyLow: 0x9d968b,
+  sun: 0xffeed6,
+  ambientSky: 0xc2c3c2,
+  ambientGround: 0x837c72,
+  fog: 0x7d7a73,
+  workLight: 0xffc27a,
   hazard: 0xff3b30,
+  emergency: 0xff5a3c,
 };
